@@ -52,6 +52,10 @@ uv sync                       # installs lerobot[feetech] + torch + sklearn into
 
 If you switch to a DINOv2 encoder, the first `fit` / `run` call will download the weights (~85 MB for ViT-S) into `~/.cache/torch/hub/`. The ACT backbone has no separate download — it lives inside the policy checkpoint.
 
+### lerobot version
+
+The runtime script targets the **PyPI-stable `lerobot==0.5.1`** that `uv sync` installs. It does *not* depend on `lerobot.rollout` (which was added on `main` after 0.5.1), so you don't need a side-by-side `vendor/lerobot-main` checkout to use OOD detection.
+
 ## Step 1: fit the detector
 
 ```bash
