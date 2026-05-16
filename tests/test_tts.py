@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from unittest.mock import Mock
@@ -64,6 +65,38 @@ class TTSTest(unittest.TestCase):
         self.assertEqual(config.api_key, "test-key")
         self.assertEqual(config.voice_id, "test-voice")
         self.assertEqual(config.model_id, "test-model")
+
+    def test_env_file_values_override_shell_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".env"
+            path.write_text(
+                "\n".join(
+                    [
+                        "ELEVENLABS_API_KEY=file-key",
+                        "ELEVENLABS_VOICE_ID=file-voice",
+                        "ELEVENLABS_MODEL_ID=file-model",
+                    ]
+                )
+            )
+            old_values = {
+                key: os.environ.get(key)
+                for key in ("ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID", "ELEVENLABS_MODEL_ID")
+            }
+            os.environ["ELEVENLABS_API_KEY"] = "shell-key"
+            os.environ["ELEVENLABS_VOICE_ID"] = "shell-voice"
+            os.environ["ELEVENLABS_MODEL_ID"] = "shell-model"
+            try:
+                config = load_elevenlabs_tts_config(path)
+            finally:
+                for key, value in old_values.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+        self.assertEqual(config.api_key, "file-key")
+        self.assertEqual(config.voice_id, "file-voice")
+        self.assertEqual(config.model_id, "file-model")
 
     def test_missing_required_config_fails_clearly(self):
         with tempfile.TemporaryDirectory() as tmp:

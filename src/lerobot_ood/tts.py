@@ -86,7 +86,7 @@ def load_env_file(path: str | Path) -> dict[str, str]:
 
 
 def load_elevenlabs_tts_config(path: str | Path) -> ElevenLabsTTSConfig:
-    """Load ElevenLabs config from process env plus a local .env file."""
+    """Load ElevenLabs config, preferring the local .env file over shell env."""
     try:
         file_values = load_env_file(path)
     except FileNotFoundError as exc:
@@ -94,7 +94,7 @@ def load_elevenlabs_tts_config(path: str | Path) -> ElevenLabsTTSConfig:
             f"ElevenLabs voice alerts are enabled, but the TTS config file was not found: {path}. "
             "Create it with ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID, or run with --no-voice."
         ) from exc
-    values = {**file_values, **os.environ}
+    values = {**os.environ, **file_values}
 
     api_key = values.get("ELEVENLABS_API_KEY", "").strip()
     voice_id = values.get("ELEVENLABS_VOICE_ID", "").strip()
