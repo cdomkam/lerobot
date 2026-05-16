@@ -6,6 +6,7 @@ ROBOT_ID="${ROBOT_ID:-so101_follower}"
 POLICY_REPO_ID="${POLICY_REPO_ID:-ofcourseistillloveyou/act-so101-feed-me-vai-10ep-run1}"
 POLICY_TYPE="${POLICY_TYPE:-act}"
 POLICY_DEVICE="${POLICY_DEVICE:-mps}"
+N_ACTION_STEPS="${N_ACTION_STEPS:-100}"
 UV_PYTHON="${UV_PYTHON:-3.12}"
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
@@ -27,6 +28,7 @@ CAMERAS="{ front: {type: opencv, index_or_path: ${CAMERA_FRONT_INDEX}, width: ${
 
 echo "Policy repo:     ${POLICY_REPO_ID}"
 echo "Policy device:   ${POLICY_DEVICE}"
+echo "Action steps:    ${N_ACTION_STEPS}"
 echo "Rollout dataset: ${DATASET_REPO_ID}"
 echo "Robot port:      ${ROBOT_PORT}"
 echo "Python:          ${UV_PYTHON}"
@@ -41,6 +43,7 @@ exec uvx --python "${UV_PYTHON}" --from 'lerobot[feetech]' lerobot-record \
   --policy.type="${POLICY_TYPE}" \
   --policy.pretrained_path="${POLICY_REPO_ID}" \
   --policy.device="${POLICY_DEVICE}" \
+  --policy.n_action_steps="${N_ACTION_STEPS}" \
   --dataset.repo_id="${DATASET_REPO_ID}" \
   --dataset.single_task="${TASK}" \
   --dataset.fps="${FPS}" \
