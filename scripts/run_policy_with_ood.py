@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# pyright: reportMissingImports=false
 """Run a lerobot policy with per-frame OOD detection.
 
 This is the same control loop pattern as ``lerobot-rollout --strategy.type=base``,
@@ -25,17 +26,18 @@ Usage
         --ood_camera=front
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from dataclasses import dataclass
 
+from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.configs import parser
+from lerobot.robots import so_follower  # noqa: F401
 from lerobot.rollout.configs import BaseStrategyConfig, RolloutConfig
 from lerobot.rollout.context import build_rollout_context
 from lerobot.utils.constants import OBS_STR
 from lerobot.utils.feature_utils import build_dataset_frame
+from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.process import ProcessSignalHandler
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging
@@ -208,4 +210,5 @@ def main(cfg: OODRolloutConfig) -> None:
 
 
 if __name__ == "__main__":
+    register_third_party_plugins()
     main()

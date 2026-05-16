@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+LEROBOT_MAIN_DIR="${LEROBOT_MAIN_DIR:-${ROOT_DIR}/vendor/lerobot-main}"
+if [[ "${LEROBOT_MAIN_DIR}" != /* ]]; then
+  LEROBOT_MAIN_DIR="${ROOT_DIR}/${LEROBOT_MAIN_DIR}"
+fi
+
 ROBOT_PORT="${ROBOT_PORT:-/dev/cu.usbmodem5C4C1268491}"
 ROBOT_ID="${ROBOT_ID:-so101_follower}"
 POLICY_REPO_ID="${POLICY_REPO_ID:-ofcourseistillloveyou/act-so101-feed-me-vai-10ep-run1}"
@@ -21,7 +28,17 @@ CAMERA_SIDE_INDEX="${CAMERA_SIDE_INDEX:-1}"
 CAMERA_WIDTH="${CAMERA_WIDTH:-640}"
 CAMERA_HEIGHT="${CAMERA_HEIGHT:-480}"
 
+if [[ "${OOD_DETECTOR_PATH}" != /* ]]; then
+  OOD_DETECTOR_PATH="${ROOT_DIR}/${OOD_DETECTOR_PATH}"
+fi
+
 CAMERAS="{ front: {type: opencv, index_or_path: ${CAMERA_FRONT_INDEX}, width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${FPS}}, side: {type: opencv, index_or_path: ${CAMERA_SIDE_INDEX}, width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${FPS}} }"
+
+if [[ ! -d "${LEROBOT_MAIN_DIR}" ]]; then
+  echo "Missing latest LeRobot checkout: ${LEROBOT_MAIN_DIR}" >&2
+  echo "Expected it at vendor/lerobot-main." >&2
+  exit 1
+fi
 
 if [[ ! -f "${OOD_DETECTOR_PATH}" ]]; then
   echo "Missing OOD detector at: ${OOD_DETECTOR_PATH}" >&2
@@ -39,7 +56,14 @@ echo "Python:          ${UV_PYTHON}"
 echo
 echo "Keep one hand near power/USB. Press Ctrl-C to stop."
 
-exec uv run --python "${UV_PYTHON}" python scripts/run_policy_with_ood.py \
+cd "${LEROBOT_MAIN_DIR}"
+
+export PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+
+exec uv run --project "${LEROBOT_MAIN_DIR}" --python "${UV_PYTHON}" \
+  --extra dataset --extra hardware --extra viz --extra feetech \
+  --with numpy --with scikit-learn --with torchvision \
+  python "${ROOT_DIR}/scripts/run_policy_with_ood.py" \
   --strategy.type=base \
   --policy.path="${POLICY_REPO_ID}" \
   --device="${POLICY_DEVICE}" \
