@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import platform
+import shutil
 import sys
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 
 def _load_tts_module(repo_root: Path):
@@ -43,18 +46,46 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parent
     tts = _load_tts_module(repo_root)
 
-    config = tts.load_elevenlabs_tts_config(args.env)
+    try:
+        config = tts.load_elevenlabs_tts_config(args.env)
+    except Exception as exc:
+        print(f"ElevenLabs config error: {exc}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Expected local setup:", file=sys.stderr)
+        print("  cp .env.example .env", file=sys.stderr)
+        print("  # edit .env and add ELEVENLABS_API_KEY=your_key_here", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    if platform.system() == "Darwin" and not Path(config.player).exists():
+        print(f"Audio player not found: {config.player}", file=sys.stderr)
+        raise SystemExit(1)
+    if platform.system() != "Darwin" and shutil.which(config.player) is None:
+        print(f"Audio player not found on PATH: {config.player}", file=sys.stderr)
+        raise SystemExit(1)
+
     phrase = args.text or tts.choose_cheeto_ood_phrase()
-    worker = tts.ElevenLabsTTSWorker(config, max_queue_size=2)
+    worker = tts.ElevenLabsTTSWorker(config, max_queue_size=2, log_errors=False)
 
     print(f"voice_id={config.voice_id}")
     print(f"model_id={config.model_id}")
     print(f"phrase={phrase}")
 
-    if not worker.speak(phrase):
-        raise RuntimeError("TTS queue rejected the alert")
-    worker._queue.join()
-    worker.close()
+    try:
+        if not worker.speak(phrase):
+            print("TTS queue rejected the alert", file=sys.stderr)
+            raise SystemExit(1)
+        worker._queue.join()
+        if worker.last_error is not None:
+            raise worker.last_error
+    except HTTPError as exc:
+        print(f"ElevenLabs HTTP error: {exc.code} {exc.reason}", file=sys.stderr)
+        print("Check that the API key belongs to the workspace and can access the voice id.", file=sys.stderr)
+        raise SystemExit(1) from exc
+    except URLError as exc:
+        print(f"ElevenLabs network error: {exc.reason}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    finally:
+        worker.close()
     print("elevenlabs_tts_smoke_ok")
 
 

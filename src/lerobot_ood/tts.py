@@ -131,13 +131,16 @@ class ElevenLabsTTSWorker:
         max_queue_size: int = 25,
         opener=urllib.request.urlopen,
         player=subprocess.run,
+        log_errors: bool = True,
     ):
         self.config = config
         self._queue: queue.Queue[str | None] = queue.Queue(maxsize=max_queue_size)
         self._opener = opener
         self._player = player
+        self._log_errors = log_errors
         self._thread = threading.Thread(target=self._run, name="elevenlabs-tts", daemon=True)
         self._started = False
+        self.last_error: BaseException | None = None
 
     def start(self) -> None:
         if not self._started:
@@ -170,8 +173,11 @@ class ElevenLabsTTSWorker:
                 if text is None:
                     return
                 self._speak_now(text)
-            except Exception:
-                logger.exception("ElevenLabs TTS alert failed")
+                self.last_error = None
+            except Exception as exc:
+                self.last_error = exc
+                if self._log_errors:
+                    logger.exception("ElevenLabs TTS alert failed")
             finally:
                 self._queue.task_done()
 
