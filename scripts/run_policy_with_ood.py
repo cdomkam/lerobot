@@ -71,7 +71,7 @@ class OODRolloutConfig(RolloutConfig):
     # Optional ElevenLabs TTS alerts. Disable with --ood_tts_enabled=false or the shell --no-voice flag.
     ood_tts_enabled: bool = True
     ood_tts_config_path: str = ".env"
-    ood_tts_every_n: int = 1
+    ood_tts_every_n: int = 30
     ood_tts_queue_max: int = 25
 
 

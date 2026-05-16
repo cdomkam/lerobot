@@ -10,6 +10,7 @@ import random
 import subprocess
 import tempfile
 import threading
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -204,5 +205,11 @@ class ElevenLabsTTSWorker:
             },
             method="POST",
         )
-        with self._opener(request, timeout=self.config.timeout_s) as response:
-            return response.read()
+        try:
+            with self._opener(request, timeout=self.config.timeout_s) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"ElevenLabs TTS request failed with HTTP {exc.code} {exc.reason}: {body}"
+            ) from exc
