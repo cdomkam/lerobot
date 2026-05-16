@@ -2,7 +2,7 @@
 name = "lerobot-ood"
 version = "0.1.0"
 description = "OOD detection wrapped around lerobot policy inference"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "lerobot[feetech]>=0.5",
     "torch>=2.1",
