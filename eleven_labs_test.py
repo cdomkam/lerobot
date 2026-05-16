@@ -16,6 +16,11 @@ import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
+PLACEHOLDER_VALUES = {
+    "your_elevenlabs_api_key",
+    "your_elevenlabs_voice_id",
+}
+
 
 def _load_tts_module(repo_root: Path):
     path = repo_root / "src" / "lerobot_ood" / "tts.py"
@@ -55,6 +60,13 @@ def main() -> None:
         print("  cp .env.example .env", file=sys.stderr)
         print("  # edit .env and add ELEVENLABS_API_KEY=your_key_here", file=sys.stderr)
         raise SystemExit(1) from exc
+    if config.api_key in PLACEHOLDER_VALUES or config.voice_id in PLACEHOLDER_VALUES:
+        print(f"ElevenLabs config error: {args.env} still contains placeholder values.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Expected local setup:", file=sys.stderr)
+        print("  cp .env.example .env", file=sys.stderr)
+        print("  # edit .env and replace ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID", file=sys.stderr)
+        raise SystemExit(1)
 
     if platform.system() == "Darwin" and not Path(config.player).exists():
         print(f"Audio player not found: {config.player}", file=sys.stderr)
@@ -83,6 +95,10 @@ def main() -> None:
         raise SystemExit(1) from exc
     except URLError as exc:
         print(f"ElevenLabs network error: {exc.reason}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    except RuntimeError as exc:
+        print(f"ElevenLabs TTS error: {exc}", file=sys.stderr)
+        print("Check that the API key belongs to the workspace and can access the voice id.", file=sys.stderr)
         raise SystemExit(1) from exc
     finally:
         worker.close()
