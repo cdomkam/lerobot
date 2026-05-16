@@ -19,6 +19,8 @@ import torch
 import torch.nn.functional as F
 from torchvision import transforms
 
+from ._image import to_uint8_rgb_hw3
+
 logger = logging.getLogger(__name__)
 
 DinoModel = Literal["dinov2_vits14", "dinov2_vitb14", "dinov2_vitl14"]
@@ -65,7 +67,7 @@ class DinoV2Encoder:
 
     @torch.inference_mode()
     def __call__(self, image: np.ndarray) -> np.ndarray:
-        x = self._tx(_to_uint8_rgb(image)).unsqueeze(0).to(self.device)
+        x = self._tx(to_uint8_rgb_hw3(image)).unsqueeze(0).to(self.device)
         z = self._model(x).squeeze(0)
         z = F.normalize(z, dim=0)
         return z.float().cpu().numpy()
@@ -78,18 +80,3 @@ class DinoV2Encoder:
             if log_every and i % log_every == 0:
                 logger.info("encoded %d frames", i)
         return np.stack(out, axis=0)
-
-
-def _to_uint8_rgb(image: np.ndarray) -> np.ndarray:
-    """Coerce to ``(H, W, 3)`` uint8 RGB."""
-    img = np.asarray(image)
-    if img.ndim == 3 and img.shape[0] == 3 and img.shape[-1] != 3:
-        img = np.transpose(img, (1, 2, 0))
-    if img.dtype != np.uint8:
-        if img.max() <= 1.0:
-            img = (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
-        else:
-            img = np.clip(img, 0, 255).astype(np.uint8)
-    if img.ndim != 3 or img.shape[-1] != 3:
-        raise ValueError(f"expected (H, W, 3) image, got shape {img.shape}")
-    return img

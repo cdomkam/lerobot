@@ -2,17 +2,30 @@
 """Fit the OOD detector on frames from a lerobot dataset.
 
 Pulls a ``LeRobotDataset`` (from local cache or HuggingFace), encodes a
-subsample of frames with DINOv2, and saves a Mahalanobis detector.
+subsample of frames, and saves a Mahalanobis detector.
 
-Example
--------
+By default the encoder is ACT's own ResNet backbone — pass
+``--policy_path <repo_or_dir>`` so we can load it. If you'd rather use
+a generic visual encoder (e.g. while evaluating a policy you don't
+own), pass ``--encoder dinov2_vits14``.
+
+Examples
+--------
 
 ::
 
+    # Default: reuse ACT's backbone.
     uv run python scripts/fit_ood_detector.py \\
         --dataset_repo_id ofcourseistillloveyou/so-101-feed-me \\
-        --camera_name front \\
-        --output_path models/ood_detector.npz
+        --policy_path  ofcourseistillloveyou/act-so101-feed-me-vai-10ep-run1 \\
+        --camera_name  front \\
+        --output_path  models/ood_detector.npz
+
+    # Fallback: DINOv2.
+    uv run python scripts/fit_ood_detector.py \\
+        --dataset_repo_id ofcourseistillloveyou/so-101-feed-me \\
+        --encoder dinov2_vits14 \\
+        --camera_name front
 """
 
 from __future__ import annotations
@@ -21,12 +34,12 @@ import argparse
 import logging
 
 import numpy as np
-import torch
 
 from lerobot.datasets import LeRobotDataset
 from lerobot.utils.utils import init_logging
 
-from lerobot_ood import DinoV2Encoder, OODDetector
+from lerobot_ood import ACTBackboneEncoder, DinoV2Encoder, OODDetector
+from lerobot_ood._image import to_uint8_rgb_hw3
 
 logger = logging.getLogger("fit_ood_detector")
 
@@ -39,7 +52,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output_path", default="models/ood_detector.npz")
     p.add_argument("--max_frames", type=int, default=2000,
                    help="Random subsample size. Set to 0 to use all frames.")
-    p.add_argument("--encoder", default="dinov2_vits14")
+    p.add_argument(
+        "--encoder",
+        default="act_backbone",
+        help="'act_backbone' (default; requires --policy_path) or 'dinov2_<size>'.",
+    )
+    p.add_argument("--policy_path", default=None,
+                   help="HF repo id or local path of the ACT policy (required for act_backbone).")
     p.add_argument("--device", default=None)
     p.add_argument("--pca_components", type=int, default=32)
     p.add_argument("--threshold_percentile", type=float, default=95.0)
@@ -47,20 +66,30 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _to_uint8_rgb_hw3(img) -> np.ndarray:
-    """LeRobotDataset gives back torch tensors in CHW float [0,1]; convert."""
-    if torch.is_tensor(img):
-        arr = img.detach().cpu().numpy()
-    else:
-        arr = np.asarray(img)
-    if arr.ndim == 3 and arr.shape[0] in (1, 3) and arr.shape[-1] != 3:
-        arr = np.transpose(arr, (1, 2, 0))
-    if arr.dtype != np.uint8:
-        if arr.max() <= 1.0:
-            arr = (np.clip(arr, 0.0, 1.0) * 255.0).astype(np.uint8)
-        else:
-            arr = np.clip(arr, 0, 255).astype(np.uint8)
-    return arr
+def _build_encoder(args):
+    if args.encoder == "act_backbone":
+        if not args.policy_path:
+            raise ValueError("--policy_path is required when --encoder=act_backbone")
+        from lerobot.configs.policies import PreTrainedConfig
+        from lerobot.policies.factory import get_policy_class
+
+        logger.info("Loading ACT policy from '%s'...", args.policy_path)
+        policy_cfg = PreTrainedConfig.from_pretrained(args.policy_path)
+        policy_cfg.pretrained_path = args.policy_path
+        policy_class = get_policy_class(policy_cfg.type)
+        policy = policy_class.from_pretrained(args.policy_path, config=policy_cfg)
+        if args.device:
+            policy = policy.to(args.device)
+        policy.eval()
+        return ACTBackboneEncoder(policy=policy, device=args.device)
+
+    if args.encoder.startswith("dinov2_"):
+        return DinoV2Encoder(model=args.encoder, device=args.device)
+
+    raise ValueError(
+        f"unknown --encoder '{args.encoder}'. "
+        f"Expected 'act_backbone' or 'dinov2_<size>'."
+    )
 
 
 def main() -> None:
@@ -82,15 +111,15 @@ def main() -> None:
         idx = rng.choice(n_total, size=args.max_frames, replace=False)
     else:
         idx = np.arange(n_total)
-    logger.info("Encoding %d / %d frames from key '%s'", len(idx), n_total, image_key)
+    logger.info("Encoding %d / %d frames from key '%s' with encoder '%s'",
+                len(idx), n_total, image_key, args.encoder)
 
-    encoder = DinoV2Encoder(model=args.encoder, device=args.device)
+    encoder = _build_encoder(args)
 
-    embeddings = np.empty((len(idx), 0), dtype=np.float32)
     out = []
     for i, j in enumerate(idx, 1):
         sample = ds[int(j)]
-        out.append(encoder(_to_uint8_rgb_hw3(sample[image_key])))
+        out.append(encoder(to_uint8_rgb_hw3(sample[image_key])))
         if i % 100 == 0:
             logger.info("  encoded %d / %d", i, len(idx))
     embeddings = np.stack(out, axis=0)

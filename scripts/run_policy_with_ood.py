@@ -40,7 +40,7 @@ from lerobot.utils.process import ProcessSignalHandler
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging
 
-from lerobot_ood import DinoV2Encoder, OODDetector, extract_camera_frame
+from lerobot_ood import ACTBackboneEncoder, DinoV2Encoder, OODDetector, extract_camera_frame
 
 logger = logging.getLogger("run_policy_with_ood")
 
@@ -51,7 +51,9 @@ class OODRolloutConfig(RolloutConfig):
 
     ood_detector_path: str = ""
     ood_camera: str = "front"
-    ood_encoder: str = "dinov2_vits14"
+    # "act_backbone" (default) reuses the loaded policy's vision backbone.
+    # "dinov2_vits14" / "dinov2_vitb14" / "dinov2_vitl14" run a separate model.
+    ood_encoder: str = "act_backbone"
     # Print every Nth OOD detection (1 = every one).
     ood_log_every_n: int = 1
     # Periodically print in-dist scores too — useful for sanity-checking threshold.
@@ -70,7 +72,6 @@ def main(cfg: OODRolloutConfig) -> None:
             f"got '{cfg.strategy.type}'"
         )
 
-    encoder = DinoV2Encoder(model=cfg.ood_encoder, device=cfg.device)
     detector = OODDetector.load(cfg.ood_detector_path)
     logger.info(
         "OOD detector loaded from %s (threshold=%.3f, pca_components=%s)",
@@ -83,6 +84,19 @@ def main(cfg: OODRolloutConfig) -> None:
 
     logger.info("Building rollout context (this loads the policy and connects the robot)...")
     ctx = build_rollout_context(cfg, shutdown_event)
+
+    # Build the encoder *after* the policy is loaded so act_backbone can
+    # share the policy's vision module.
+    if cfg.ood_encoder == "act_backbone":
+        encoder = ACTBackboneEncoder(policy=ctx.policy.policy, device=cfg.device)
+    elif cfg.ood_encoder.startswith("dinov2_"):
+        encoder = DinoV2Encoder(model=cfg.ood_encoder, device=cfg.device)
+    else:
+        raise ValueError(
+            f"unknown --ood_encoder '{cfg.ood_encoder}'. "
+            f"Expected 'act_backbone' or 'dinov2_<size>'."
+        )
+    logger.info("OOD encoder: %s", cfg.ood_encoder)
 
     robot = ctx.hardware.robot_wrapper
     processors = ctx.processors

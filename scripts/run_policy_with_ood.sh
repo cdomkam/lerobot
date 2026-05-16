@@ -9,7 +9,7 @@ UV_PYTHON="${UV_PYTHON:-3.12}"
 
 OOD_DETECTOR_PATH="${OOD_DETECTOR_PATH:-models/ood_detector.npz}"
 OOD_CAMERA="${OOD_CAMERA:-front}"
-OOD_ENCODER="${OOD_ENCODER:-dinov2_vits14}"
+OOD_ENCODER="${OOD_ENCODER:-act_backbone}"
 OOD_LOG_IN_DIST_EVERY_N="${OOD_LOG_IN_DIST_EVERY_N:-0}"
 
 TASK="${TASK:-Pick up the tape and put it on the pink post-it.}"
