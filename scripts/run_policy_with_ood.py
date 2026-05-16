@@ -42,7 +42,15 @@ from lerobot.utils.process import ProcessSignalHandler
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging
 
-from lerobot_ood import ACTBackboneEncoder, DinoV2Encoder, OODDetector, extract_camera_frame
+from lerobot_ood import (
+    ACTBackboneEncoder,
+    DinoV2Encoder,
+    ElevenLabsTTSWorker,
+    OODDetector,
+    choose_cheeto_ood_phrase,
+    extract_camera_frame,
+    load_elevenlabs_tts_config,
+)
 
 logger = logging.getLogger("run_policy_with_ood")
 
@@ -60,6 +68,11 @@ class OODRolloutConfig(RolloutConfig):
     ood_log_every_n: int = 1
     # Periodically print in-dist scores too — useful for sanity-checking threshold.
     ood_log_in_dist_every_n: int = 0
+    # Optional ElevenLabs TTS alerts. Disable with --ood_tts_enabled=false or the shell --no-voice flag.
+    ood_tts_enabled: bool = True
+    ood_tts_config_path: str = ".env"
+    ood_tts_every_n: int = 1
+    ood_tts_queue_max: int = 25
 
 
 @parser.wrap()
@@ -74,6 +87,15 @@ def main(cfg: OODRolloutConfig) -> None:
             f"got '{cfg.strategy.type}'"
         )
 
+    tts_config = None
+    tts_worker = None
+    if cfg.ood_tts_enabled:
+        if cfg.ood_tts_every_n <= 0:
+            raise ValueError("--ood_tts_every_n must be positive when TTS is enabled")
+        if cfg.ood_tts_queue_max <= 0:
+            raise ValueError("--ood_tts_queue_max must be positive when TTS is enabled")
+        tts_config = load_elevenlabs_tts_config(cfg.ood_tts_config_path)
+
     detector = OODDetector.load(cfg.ood_detector_path)
     logger.info(
         "OOD detector loaded from %s (threshold=%.3f, pca_components=%s)",
@@ -81,6 +103,16 @@ def main(cfg: OODRolloutConfig) -> None:
         detector.threshold,
         detector.pca_components,
     )
+
+    if tts_config is not None:
+        tts_worker = ElevenLabsTTSWorker(tts_config, max_queue_size=cfg.ood_tts_queue_max)
+        tts_worker.start()
+        logger.info(
+            "ElevenLabs OOD TTS enabled (voice_id=%s, model_id=%s, config=%s)",
+            tts_config.voice_id,
+            tts_config.model_id,
+            cfg.ood_tts_config_path,
+        )
 
     shutdown_event = ProcessSignalHandler(use_threads=True, display_pid=False).shutdown_event
 
@@ -155,6 +187,14 @@ def main(cfg: OODRolloutConfig) -> None:
                         n_seen,
                         100.0 * n_ood / n_seen,
                     )
+                    if (
+                        tts_worker is not None
+                        and cfg.ood_tts_every_n > 0
+                        and n_ood % cfg.ood_tts_every_n == 0
+                    ):
+                        phrase = choose_cheeto_ood_phrase()
+                        if not tts_worker.speak(phrase):
+                            logger.warning("OOD TTS queue full; dropping voice alert")
             elif cfg.ood_log_in_dist_every_n > 0 and n_seen % cfg.ood_log_in_dist_every_n == 0:
                 logger.info(
                     "[in-dist] frame=%d  score=%.3f  threshold=%.3f",
@@ -197,6 +237,8 @@ def main(cfg: OODRolloutConfig) -> None:
         teleop = ctx.hardware.teleop
         if teleop is not None and teleop.is_connected:
             teleop.disconnect()
+        if tts_worker is not None:
+            tts_worker.close()
 
         mean_score = sum_score / max(n_seen, 1)
         logger.info(

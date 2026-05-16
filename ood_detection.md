@@ -90,7 +90,7 @@ Output is a single `.npz` containing the fitted mean, inverse covariance, PCA co
 ./scripts/run_policy_with_ood.sh
 ```
 
-Same env-var contract as `scripts/run_policy_on_robot.sh` plus four OOD knobs:
+Same env-var contract as `scripts/run_policy_on_robot.sh` plus these OOD knobs:
 
 | Env var | Default | Purpose |
 |---|---|---|
@@ -98,12 +98,42 @@ Same env-var contract as `scripts/run_policy_on_robot.sh` plus four OOD knobs:
 | `OOD_CAMERA` | `front` | Which camera feeds the OOD score |
 | `OOD_ENCODER` | `act_backbone` | Must match the encoder used at fit time |
 | `OOD_LOG_IN_DIST_EVERY_N` | `0` | If >0, also print in-dist scores every N frames (debugging) |
+| `OOD_TTS_ENABLED` | `true` | If `true`, speak an ElevenLabs alert on OOD events |
+| `OOD_TTS_CONFIG_PATH` | `.env` | Local ignored config file with ElevenLabs credentials |
+| `OOD_TTS_EVERY_N` | `1` | Speak every Nth OOD event |
+| `OOD_TTS_QUEUE_MAX` | `25` | Max pending voice alerts before new ones are dropped |
 
-For first runs, keep the episode short and watch the log:
+For first runs without voice output, keep the episode short and watch the log:
 
 ```bash
-DURATION=15 OOD_LOG_IN_DIST_EVERY_N=30 ./scripts/run_policy_with_ood.sh
+DURATION=15 OOD_LOG_IN_DIST_EVERY_N=30 ./scripts/run_policy_with_ood.sh --no-voice
 ```
+
+To speak Cheeto-specific British-English OOD alerts over the laptop speakers,
+create a local `.env` file:
+
+```bash
+ELEVENLABS_API_KEY=your_key_here
+ELEVENLABS_VOICE_ID=your_voice_id_here
+ELEVENLABS_MODEL_ID=eleven_flash_v2_5
+```
+
+Voice is enabled by default. Then run:
+
+```bash
+./scripts/run_policy_with_ood.sh
+```
+
+For testing without ElevenLabs credentials or laptop speaker output:
+
+```bash
+./scripts/run_policy_with_ood.sh --no-voice
+```
+
+Voice alerts are queued in a background worker and played with macOS `afplay`.
+They do not block policy execution. If OOD events arrive faster than audio can
+play, the queue eventually fills and new voice alerts are dropped while the
+robot loop continues.
 
 You'll see two kinds of lines:
 
