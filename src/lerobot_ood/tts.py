@@ -10,6 +10,7 @@ import random
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +42,19 @@ STRAWBERRY_OOD_PHRASES = (
     "I should like a human to inspect this Strawberry situation, please.",
 )
 
+FOOD_HANDOFF_OOD_PHRASES = (
+    "I am afraid I could not identify the requested item with enough confidence.",
+    "Pardon me, but that request was not clear enough for me to act on.",
+    "I do not recognise the food request, so I shall wait for a clearer instruction.",
+    "That scene or request seems out of distribution; I will not guess.",
+)
+
+SUCCESS_PHRASES = (
+    "Done. I have placed the {target} in your hand.",
+    "There we are. The {target} is in your hand.",
+    "Task complete. The {target} has been placed successfully.",
+)
+
 
 @dataclass(frozen=True)
 class ElevenLabsTTSConfig:
@@ -57,6 +71,18 @@ def choose_strawberry_ood_phrase(rng: random.Random | None = None) -> str:
     """Return one British-English Strawberry/OOD alert phrase."""
     rng = rng or random
     return rng.choice(STRAWBERRY_OOD_PHRASES)
+
+
+def choose_food_handoff_ood_phrase(rng: random.Random | None = None) -> str:
+    """Return an OOD/unclear-request phrase for the food handoff flow."""
+    rng = rng or random
+    return rng.choice(FOOD_HANDOFF_OOD_PHRASES)
+
+
+def choose_success_phrase(target: str, rng: random.Random | None = None) -> str:
+    """Return a success phrase for a completed handoff."""
+    rng = rng or random
+    return rng.choice(SUCCESS_PHRASES).format(target=target)
 
 
 def load_env_file(path: str | Path) -> dict[str, str]:
@@ -165,6 +191,15 @@ class ElevenLabsTTSWorker:
         except queue.Full:
             pass
         self._thread.join(timeout=timeout)
+
+    def wait_until_idle(self, timeout: float | None = None) -> bool:
+        """Wait until queued speech has been fetched and played."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while self._queue.unfinished_tasks > 0:
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+        return True
 
     def _run(self) -> None:
         while True:

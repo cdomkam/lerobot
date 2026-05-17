@@ -11,6 +11,8 @@ dependencies = [
     "scikit-learn",
     "huggingface_hub",
     "draccus",
+    "opencv-python",
+    "sounddevice",
 ]
 
 [build-system]
