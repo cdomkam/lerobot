@@ -84,3 +84,4 @@ tmp/
 ### OS Files ###
 .DS_Store
 Thumbs.db
+.venv-clanker
