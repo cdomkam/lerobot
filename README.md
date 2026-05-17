@@ -34,11 +34,11 @@ pauses for hand reset, and then returns to listening. Do not pass `--target` in
 production; `--target` is only a debug override and forces the same policy every
 cycle.
 
-Enable OpenAI success confirmation for production by setting one environment
-variable:
+OpenAI success confirmation is enabled by default in production. To disable it
+for a debug run:
 
 ```bash
-OPENAI_SUCCESS_ENABLED=true ./scripts/run_food_handoff.sh
+OPENAI_SUCCESS_ENABLED=false ./scripts/run_food_handoff.sh
 ```
 
 ## Full Loop
@@ -63,12 +63,13 @@ The runtime is `scripts/run_food_handoff.sh`, which launches
 - **Success detection:** the local ROI/color detector watches named camera
   `side`, which maps to `CAMERA_SIDE_INDEX=1`. This is the scene camera in the
   current setup.
-- **OpenAI confirmation:** when `OPENAI_SUCCESS_ENABLED=true`, an OpenCV success
-  candidate is sent to `gpt-5.4-nano` using the side-camera frame. The loop only
-  accepts success if the model says the target food is in the user's hand with
-  at least `OPENAI_SUCCESS_MIN_CONFIDENCE` from `.env` (default `0.70`). If the
-  API request fails, the runner logs a warning and falls back to the OpenCV
-  success result.
+- **OpenAI confirmation:** by default, an OpenCV success candidate is sent to
+  `gpt-5.4-nano` using the side-camera frame. The loop only accepts success if
+  the model says the target food is in the user's hand with at least
+  `OPENAI_SUCCESS_MIN_CONFIDENCE` from `.env` (default `0.70`). If the API
+  request fails, the runner logs a warning and falls back to the OpenCV success
+  result. Set `OPENAI_SUCCESS_ENABLED=false` for a debug run without OpenAI
+  confirmation.
 - **Reset/repeat:** robot mode loops until interrupted by default. Test mode
   runs one cycle by default. Use `--max-cycles N` to bound either mode, or
   `--max-cycles 0` for an unlimited loop.
@@ -93,7 +94,7 @@ text-to-speech output. Speech-to-text uses ElevenLabs `scribe_v2` internally,
 because the STT endpoint accepts Scribe models rather than TTS models such as
 `eleven_v3`.
 
-Optional OpenAI success confirmation uses the same `.env` file:
+OpenAI success confirmation uses the same `.env` file:
 
 ```bash
 OAI_KEY=...
@@ -174,10 +175,10 @@ during the request recording window:
   --reset-pause-s 5
 ```
 
-Optional OpenAI success confirmation:
+Disable OpenAI success confirmation for a debug run:
 
 ```bash
-OPENAI_SUCCESS_ENABLED=true \
+OPENAI_SUCCESS_ENABLED=false \
 ./scripts/run_food_handoff.sh \
   --max-cycles 1 \
   --reset-pause-s 5
@@ -229,10 +230,10 @@ Marshmallow during the second cycle:
   --reset-pause-s 5
 ```
 
-With OpenAI success confirmation:
+Disable OpenAI success confirmation for a debug run:
 
 ```bash
-OPENAI_SUCCESS_ENABLED=true \
+OPENAI_SUCCESS_ENABLED=false \
 ./scripts/run_food_handoff.sh \
   --max-cycles 2 \
   --reset-pause-s 5
@@ -267,7 +268,7 @@ Useful robot-mode environment knobs:
 CAMERA_SIDE_INDEX=1              # scene camera used for hand and success
 CAMERA_FRONT_INDEX=0             # on-robot/front camera, used by OOD by default
 OOD_CAMERA=front
-OPENAI_SUCCESS_ENABLED=false     # set true to confirm OpenCV success candidates
+OPENAI_SUCCESS_ENABLED=true      # default; set false only for debug runs
 OPENAI_SUCCESS_CONFIG_PATH=.env
 OPENAI_SUCCESS_EVERY_N=15        # minimum frames between OpenAI confirmation calls
 DURATION=30
