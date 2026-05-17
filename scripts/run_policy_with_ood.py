@@ -47,7 +47,7 @@ from lerobot_ood import (
     DinoV2Encoder,
     ElevenLabsTTSWorker,
     OODDetector,
-    choose_cheeto_ood_phrase,
+    choose_strawberry_ood_phrase,
     extract_camera_frame,
     load_elevenlabs_tts_config,
 )
@@ -192,7 +192,7 @@ def main(cfg: OODRolloutConfig) -> None:
                         and cfg.ood_tts_every_n > 0
                         and n_ood % cfg.ood_tts_every_n == 0
                     ):
-                        phrase = choose_cheeto_ood_phrase()
+                        phrase = choose_strawberry_ood_phrase()
                         if not tts_worker.speak(phrase):
                             logger.warning("OOD TTS queue full; dropping voice alert")
             elif cfg.ood_log_in_dist_every_n > 0 and n_seen % cfg.ood_log_in_dist_every_n == 0:

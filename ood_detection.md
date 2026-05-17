@@ -109,7 +109,7 @@ For first runs without voice output, keep the episode short and watch the log:
 DURATION=15 OOD_LOG_IN_DIST_EVERY_N=30 ./scripts/run_policy_with_ood.sh --no-voice
 ```
 
-To speak Cheeto-specific British-English OOD alerts over the laptop speakers,
+To speak Strawberry-specific British-English OOD alerts over the laptop speakers,
 create a local `.env` file:
 
 ```bash

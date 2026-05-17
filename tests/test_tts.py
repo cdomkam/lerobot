@@ -16,16 +16,16 @@ sys.modules[spec.name] = tts
 spec.loader.exec_module(tts)
 
 (
-    CHEETO_OOD_PHRASES,
+    STRAWBERRY_OOD_PHRASES,
     ElevenLabsTTSConfig,
     ElevenLabsTTSWorker,
-    choose_cheeto_ood_phrase,
+    choose_strawberry_ood_phrase,
     load_elevenlabs_tts_config,
 ) = (
-    tts.CHEETO_OOD_PHRASES,
+    tts.STRAWBERRY_OOD_PHRASES,
     tts.ElevenLabsTTSConfig,
     tts.ElevenLabsTTSWorker,
-    tts.choose_cheeto_ood_phrase,
+    tts.choose_strawberry_ood_phrase,
     tts.load_elevenlabs_tts_config,
 )
 
@@ -43,9 +43,9 @@ class FakeResponse:
 
 class TTSTest(unittest.TestCase):
     def test_phrase_inventory_has_twenty_non_empty_phrases(self):
-        self.assertEqual(len(CHEETO_OOD_PHRASES), 20)
-        self.assertTrue(all("Cheeto" in phrase for phrase in CHEETO_OOD_PHRASES))
-        self.assertIn(choose_cheeto_ood_phrase(), CHEETO_OOD_PHRASES)
+        self.assertEqual(len(STRAWBERRY_OOD_PHRASES), 20)
+        self.assertTrue(all("Strawberry" in phrase for phrase in STRAWBERRY_OOD_PHRASES))
+        self.assertIn(choose_strawberry_ood_phrase(), STRAWBERRY_OOD_PHRASES)
 
     def test_load_config_from_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:

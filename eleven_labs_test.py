@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--text",
         default=None,
-        help="Text to speak. Defaults to a random Cheeto/OOD phrase.",
+        help="Text to speak. Defaults to a random Strawberry/OOD phrase.",
     )
     return parser.parse_args()
 
@@ -75,7 +75,7 @@ def main() -> None:
         print(f"Audio player not found on PATH: {config.player}", file=sys.stderr)
         raise SystemExit(1)
 
-    phrase = args.text or tts.choose_cheeto_ood_phrase()
+    phrase = args.text or tts.choose_strawberry_ood_phrase()
     worker = tts.ElevenLabsTTSWorker(config, max_queue_size=2, log_errors=False)
 
     print(f"voice_id={config.voice_id}")

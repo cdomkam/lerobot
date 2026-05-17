@@ -18,27 +18,27 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-CHEETO_OOD_PHRASES = (
-    "I say, that does not look like the Cheeto I was trained to find.",
-    "Pardon me, but this Cheeto situation appears unfamiliar.",
-    "Goodness me, I cannot make out the Cheeto in this scene.",
-    "I am afraid this does not resemble my usual Cheeto arrangement.",
-    "Steady on, this view is rather unlike the expected Cheeto.",
-    "I beg your pardon, but the Cheeto appears to have gone off-script.",
-    "This is most irregular; I do not recognise the Cheeto before me.",
-    "By my reckoning, this is not the Cheeto I was looking for.",
-    "I am not entirely convinced that I see the proper Cheeto here.",
-    "How curious; the scene does not match my Cheeto training.",
-    "I say, this Cheeto business looks distinctly out of distribution.",
-    "Forgive me, but the Cheeto target is not presenting as expected.",
-    "This appears to be a rather unfamiliar Cheeto predicament.",
-    "I must report that the Cheeto does not look quite right.",
-    "Dear me, I am seeing something rather unlike the expected Cheeto.",
-    "The Cheeto, if present, is not in a form I confidently recognise.",
-    "This view is a touch improper for a well-behaved Cheeto search.",
-    "I am afraid the Cheeto evidence is not up to my usual standard.",
-    "Rather odd, this does not look like my trained Cheeto scene.",
-    "I should like a human to inspect this Cheeto situation, please.",
+STRAWBERRY_OOD_PHRASES = (
+    "I say, that does not look like the Strawberry I was trained to find.",
+    "Pardon me, but this Strawberry situation appears unfamiliar.",
+    "Goodness me, I cannot make out the Strawberry in this scene.",
+    "I am afraid this does not resemble my usual Strawberry arrangement.",
+    "Steady on, this view is rather unlike the expected Strawberry.",
+    "I beg your pardon, but the Strawberry appears to have gone off-script.",
+    "This is most irregular; I do not recognise the Strawberry before me.",
+    "By my reckoning, this is not the Strawberry I was looking for.",
+    "I am not entirely convinced that I see the proper Strawberry here.",
+    "How curious; the scene does not match my Strawberry training.",
+    "I say, this Strawberry business looks distinctly out of distribution.",
+    "Forgive me, but the Strawberry target is not presenting as expected.",
+    "This appears to be a rather unfamiliar Strawberry predicament.",
+    "I must report that the Strawberry does not look quite right.",
+    "Dear me, I am seeing something rather unlike the expected Strawberry.",
+    "The Strawberry, if present, is not in a form I confidently recognise.",
+    "This view is a touch improper for a well-behaved Strawberry search.",
+    "I am afraid the Strawberry evidence is not up to my usual standard.",
+    "Rather odd, this does not look like my trained Strawberry scene.",
+    "I should like a human to inspect this Strawberry situation, please.",
 )
 
 
@@ -53,10 +53,10 @@ class ElevenLabsTTSConfig:
     timeout_s: float = 20.0
 
 
-def choose_cheeto_ood_phrase(rng: random.Random | None = None) -> str:
-    """Return one British-English Cheeto/OOD alert phrase."""
+def choose_strawberry_ood_phrase(rng: random.Random | None = None) -> str:
+    """Return one British-English Strawberry/OOD alert phrase."""
     rng = rng or random
-    return rng.choice(CHEETO_OOD_PHRASES)
+    return rng.choice(STRAWBERRY_OOD_PHRASES)
 
 
 def load_env_file(path: str | Path) -> dict[str, str]:

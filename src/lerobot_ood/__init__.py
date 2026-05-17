@@ -14,10 +14,10 @@ from .detector import OODDetector, OODResult
 from .encoder import DinoV2Encoder
 from .obs import extract_camera_frame
 from .tts import (
-    CHEETO_OOD_PHRASES,
+    STRAWBERRY_OOD_PHRASES,
     ElevenLabsTTSConfig,
     ElevenLabsTTSWorker,
-    choose_cheeto_ood_phrase,
+    choose_strawberry_ood_phrase,
     load_elevenlabs_tts_config,
 )
 
@@ -27,9 +27,9 @@ __all__ = [
     "ACTBackboneEncoder",
     "DinoV2Encoder",
     "extract_camera_frame",
-    "CHEETO_OOD_PHRASES",
+    "STRAWBERRY_OOD_PHRASES",
     "ElevenLabsTTSConfig",
     "ElevenLabsTTSWorker",
-    "choose_cheeto_ood_phrase",
+    "choose_strawberry_ood_phrase",
     "load_elevenlabs_tts_config",
 ]
