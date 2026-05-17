@@ -21,18 +21,16 @@ Example
         --url http://lerobot-act:8080/infer \\
         --robot.port /dev/ttyACM0 \\
         --robot.id my-so101 \\
-        --robot.cameras.front.type opencv \\
-        --robot.cameras.front.index_or_path 0 \\
-        --robot.cameras.side.type opencv \\
-        --robot.cameras.side.index_or_path 1 \\
+        --robot.cameras='{front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}, side: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}}' \\
         --robot.max_relative_target 5.0 \\
         --fps 30 \\
-        --task "Pick up the marshmellow and put it in the hand" \\
         --log_path /tmp/remote-act.jsonl
 
-The robot config block (--robot.*) is parsed by lerobot's draccus and
-matches `lerobot-record`'s --robot CLI exactly — anything that works there
-works here.
+The robot config block (--robot.*) is parsed by lerobot's draccus. Note
+that RunConfig.robot is typed concretely as SOFollowerRobotConfig, so
+do NOT pass `--robot.type` — pass `--robot.port`, `--robot.cameras`,
+etc. directly. ACT is vision + proprioception only and takes no
+language input, so there is no --task flag either.
 """
 from __future__ import annotations
 
@@ -48,6 +46,14 @@ import draccus
 
 from lerobot.robots.so_follower import SOFollower
 from lerobot.robots.so_follower.config_so_follower import SOFollowerRobotConfig
+
+# Register concrete CameraConfig subclasses with draccus's choice registry so
+# `--robot.cameras='{cam: {type: opencv, ...}}'` parses. Matches the set that
+# `lerobot/scripts/lerobot_record.py` imports for the same reason.
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
+from lerobot.cameras.reachy2_camera.configuration_reachy2_camera import Reachy2CameraConfig  # noqa: F401
+from lerobot.cameras.zmq.configuration_zmq import ZMQCameraConfig  # noqa: F401
 
 try:
     # When invoked as `python -m serving.clients.run_remote_act`.
@@ -80,7 +86,6 @@ class RunConfig:
 
     # Loop.
     fps: int = 30
-    task: str = ""
     log_path: str | None = None
     max_ticks: int | None = None
 
@@ -91,7 +96,6 @@ def _make_log_record(
     obs: dict,
     requested: dict[str, float],
     sent: dict[str, float],
-    task: str,
     refill_calls: int,
     slow_tick_ms: float | None,
 ) -> dict:
@@ -100,7 +104,6 @@ def _make_log_record(
     return {
         "frame": tick,
         "time_s": t0,
-        "task": task,
         "state_robot": state,
         "local_action": requested,
         "processed_action": sent,
@@ -171,7 +174,7 @@ def main(cfg: RunConfig) -> int:
 
             if log_f:
                 rec = _make_log_record(
-                    tick, t0, obs, requested, sent, cfg.task,
+                    tick, t0, obs, requested, sent,
                     policy.refill_calls, slow_tick_ms,
                 )
                 log_f.write(json.dumps(rec) + "\n")
