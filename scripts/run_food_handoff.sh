@@ -157,11 +157,39 @@ if [[ "${TEST_AUDIO_PATH}" != "" && "${TEST_AUDIO_PATH}" != /* ]]; then
   TEST_AUDIO_PATH="${ROOT_DIR}/${TEST_AUDIO_PATH}"
 fi
 
+BOOTSTRAP_TARGET="${TARGET:-strawberry}"
+BOOTSTRAP_POLICY_REPO_ID="$(
+  FOOD_POLICY_CONFIG="${FOOD_POLICY_CONFIG}" BOOTSTRAP_TARGET="${BOOTSTRAP_TARGET}" python3 - <<'PY'
+import json
+import os
+import sys
+
+config_path = os.environ["FOOD_POLICY_CONFIG"]
+target = os.environ["BOOTSTRAP_TARGET"]
+with open(config_path) as f:
+    targets = json.load(f)["targets"]
+
+candidate = targets.get(target) or targets.get("strawberry") or next(iter(targets.values()))
+repo_id = candidate.get("policy_repo_id", "")
+if not repo_id or repo_id.startswith("TODO_"):
+    for candidate in targets.values():
+        repo_id = candidate.get("policy_repo_id", "")
+        if repo_id and not repo_id.startswith("TODO_"):
+            break
+
+if not repo_id or repo_id.startswith("TODO_"):
+    print("No non-TODO policy_repo_id found in food policy config", file=sys.stderr)
+    sys.exit(1)
+print(repo_id)
+PY
+)"
+
 CAMERAS="{ front: {type: opencv, index_or_path: ${CAMERA_FRONT_INDEX}, width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${FPS}}, side: {type: opencv, index_or_path: ${CAMERA_SIDE_INDEX}, width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${FPS}} }"
 
 echo "Food config:     ${FOOD_POLICY_CONFIG}"
 echo "Vision config:   ${VISION_CONFIG}"
 echo "Policy device:   ${POLICY_DEVICE}"
+echo "Bootstrap policy:${BOOTSTRAP_POLICY_REPO_ID}"
 echo "OOD detector:    ${OOD_DETECTOR_PATH}"
 echo "Voice enabled:   ${OOD_TTS_ENABLED}"
 echo "STT enabled:     ${STT_ENABLED}"
@@ -205,7 +233,7 @@ UV_RUN+=(--with numpy --with scikit-learn --with torchvision --with opencv-pytho
 
 exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --strategy.type=base \
-  --policy.path="placeholder-selected-after-request" \
+  --policy.path="${BOOTSTRAP_POLICY_REPO_ID}" \
   --device="${POLICY_DEVICE}" \
   --robot.type=so101_follower \
   --robot.port="${ROBOT_PORT}" \

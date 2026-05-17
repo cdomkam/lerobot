@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,7 +16,6 @@ from PIL import Image
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.configs import parser
-from lerobot.processor import make_default_processors
 from lerobot.robots import RobotConfig, make_robot_from_config, so_follower  # noqa: F401
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.process import ProcessSignalHandler
@@ -35,6 +35,17 @@ class ApiPolicyConfig:
     fps: int = 50
     duration: float = 45.0
     request_timeout_s: float = 10.0
+    # Start fetching the next 25-action chunk while this many actions remain.
+    # At 50 Hz, 20 actions leaves ~400ms for the HTTP request to complete.
+    prefetch_at_actions: int = 20
+    action_log_every_n_chunks: int = 1
+    # The local SO-101 follower uses degrees for the first 5 joints and 0..100 for gripper.
+    # Most external VLA servers use radians for arm joints; convert by default.
+    api_state_units: str = "radians"  # "robot" or "radians"
+    api_action_units: str = "radians"  # "robot" or "radians"
+    gripper_action_units: str = "minus1_1"  # "robot" or "minus1_1"
+    max_joint_step_deg: float = 1.0
+    max_gripper_step: float = 2.0
     front_camera: str = "front"
     side_camera: str = "side"
     state_keys: list[str] = field(
@@ -88,6 +99,91 @@ def _state(obs: dict[str, Any], state_keys: list[str]) -> list[float]:
     return [float(obs[key]) for key in state_keys]
 
 
+def _state_for_api(cfg: ApiPolicyConfig, obs: dict[str, Any]) -> list[float]:
+    state = _state(obs, cfg.state_keys)
+    if cfg.api_state_units == "robot":
+        return state
+    if cfg.api_state_units == "radians":
+        converted = state.copy()
+        converted[:5] = np.deg2rad(converted[:5]).tolist()
+        return converted
+    raise ValueError("--api_state_units must be 'robot' or 'radians'")
+
+
+def _action_for_robot(cfg: ApiPolicyConfig, action: list[float]) -> list[float]:
+    converted = [float(value) for value in action]
+    if cfg.api_action_units == "robot":
+        pass
+    elif cfg.api_action_units == "radians":
+        converted[:5] = np.rad2deg(converted[:5]).tolist()
+    else:
+        raise ValueError("--api_action_units must be 'robot' or 'radians'")
+
+    if cfg.gripper_action_units == "robot":
+        pass
+    elif cfg.gripper_action_units == "minus1_1":
+        converted[5] = float(np.clip((converted[5] + 1.0) * 50.0, 0.0, 100.0))
+    else:
+        raise ValueError("--gripper_action_units must be 'robot' or 'minus1_1'")
+    return converted
+
+
+def _limit_action_step(
+    target: list[float],
+    previous: list[float],
+    max_joint_step_deg: float,
+    max_gripper_step: float,
+) -> list[float]:
+    limited = previous.copy()
+    for i in range(5):
+        delta = target[i] - previous[i]
+        limited[i] = previous[i] + float(np.clip(delta, -max_joint_step_deg, max_joint_step_deg))
+    gripper_delta = target[5] - previous[5]
+    limited[5] = previous[5] + float(np.clip(gripper_delta, -max_gripper_step, max_gripper_step))
+    return limited
+
+
+def _summarize_vector(values: list[float]) -> str:
+    return "[" + ", ".join(f"{value:.2f}" for value in values) + "]"
+
+
+def _log_chunk_diagnostics(
+    chunk_index: int,
+    cfg: ApiPolicyConfig,
+    state: list[float],
+    actions: list[list[float]],
+    request_ms: float,
+    prefetched: bool,
+) -> None:
+    if cfg.action_log_every_n_chunks <= 0:
+        return
+    if chunk_index % cfg.action_log_every_n_chunks != 0:
+        return
+    if not actions:
+        logger.warning("chunk %d returned no actions", chunk_index)
+        return
+
+    first = actions[0]
+    last = actions[-1]
+    first_robot = _action_for_robot(cfg, first)
+    last_robot = _action_for_robot(cfg, last)
+    first_delta = [action - current for action, current in zip(first_robot, state, strict=True)]
+    max_abs_delta = max(abs(delta) for delta in first_delta)
+    source = "prefetched" if prefetched else "direct"
+    logger.info(
+        "chunk %d (%s, %.1fms): state_robot=%s first_api=%s first_robot=%s last_robot=%s first_delta=%s max_abs_delta=%.2f",
+        chunk_index,
+        source,
+        request_ms,
+        _summarize_vector(state),
+        _summarize_vector(first),
+        _summarize_vector(first_robot),
+        _summarize_vector(last_robot),
+        _summarize_vector(first_delta),
+        max_abs_delta,
+    )
+
+
 def _decode_action(response: requests.Response) -> list[list[float]]:
     try:
         payload = response.json()
@@ -113,7 +209,7 @@ def _request_actions(
 ) -> list[list[float]]:
     front = _camera_frame(obs, cfg.front_camera)
     side = _camera_frame(obs, cfg.side_camera)
-    state = _state(obs, cfg.state_keys)
+    state = _state_for_api(cfg, obs)
 
     files = {
         "front": ("front.jpg", _jpeg_bytes(front), "image/jpeg"),
@@ -132,6 +228,18 @@ def _request_actions(
     return _decode_action(response)
 
 
+def _timed_request_actions(
+    cfg: ApiPolicyConfig,
+    token: str,
+    session: requests.Session,
+    obs: dict[str, Any],
+) -> tuple[list[list[float]], float]:
+    start = time.perf_counter()
+    actions = _request_actions(cfg, token, session, obs)
+    elapsed_ms = (time.perf_counter() - start) * 1e3
+    return actions, elapsed_ms
+
+
 @parser.wrap()
 def main(cfg: ApiPolicyConfig) -> None:
     init_logging()
@@ -139,15 +247,19 @@ def main(cfg: ApiPolicyConfig) -> None:
     shutdown_event = ProcessSignalHandler(use_threads=True, display_pid=False).shutdown_event
 
     robot = make_robot_from_config(cfg.robot)
-    _, robot_action_processor, _ = make_default_processors()
     action_keys = list(cfg.state_keys)
     action_queue: list[list[float]] = []
+    pending_actions: Future[tuple[list[list[float]], float]] | None = None
+    pending_state: list[float] | None = None
+    current_target: list[float] | None = None
     control_interval = 1.0 / cfg.fps
     t_start = time.perf_counter()
+    chunk_index = 0
 
     logger.info("Connecting robot and cameras...")
     robot.connect()
     session = requests.Session()
+    executor = ThreadPoolExecutor(max_workers=1)
 
     try:
         logger.info("API inference loop starting (url=%s, fps=%d)", cfg.api_url, cfg.fps)
@@ -157,14 +269,53 @@ def main(cfg: ApiPolicyConfig) -> None:
                 logger.info("Duration limit reached (%.1fs)", cfg.duration)
                 break
 
-            obs = robot.get_observation()
             if not action_queue:
-                action_queue = _request_actions(cfg, token, session, obs)
+                if pending_actions is not None:
+                    action_queue, request_ms = pending_actions.result()
+                    pending_actions = None
+                    chunk_index += 1
+                    logger.info("received %d prefetched API actions in %.1fms", len(action_queue), request_ms)
+                    if pending_state is not None:
+                        _log_chunk_diagnostics(
+                            chunk_index, cfg, pending_state, action_queue, request_ms, prefetched=True
+                        )
+                    pending_state = None
+                else:
+                    obs = robot.get_observation()
+                    state = _state(obs, cfg.state_keys)
+                    if current_target is None:
+                        current_target = state
+                    action_queue, request_ms = _timed_request_actions(cfg, token, session, obs)
+                    chunk_index += 1
+                    logger.info("received %d API actions in %.1fms", len(action_queue), request_ms)
+                    _log_chunk_diagnostics(
+                        chunk_index, cfg, state, action_queue, request_ms, prefetched=False
+                    )
 
             action_values = action_queue.pop(0)
+            action_values = _action_for_robot(cfg, action_values)
+            if current_target is None:
+                obs = robot.get_observation()
+                current_target = _state(obs, cfg.state_keys)
+            action_values = _limit_action_step(
+                action_values,
+                current_target,
+                max_joint_step_deg=cfg.max_joint_step_deg,
+                max_gripper_step=cfg.max_gripper_step,
+            )
             action = {key: float(value) for key, value in zip(action_keys, action_values, strict=True)}
-            processed_action = robot_action_processor((action, obs))
-            robot.send_action(processed_action)
+            robot.send_action(action)
+            current_target = action_values
+
+            if (
+                cfg.prefetch_at_actions > 0
+                and pending_actions is None
+                and 0 < len(action_queue) <= cfg.prefetch_at_actions
+            ):
+                obs = robot.get_observation()
+                pending_state = _state(obs, cfg.state_keys)
+                pending_actions = executor.submit(_timed_request_actions, cfg, token, session, obs)
+                logger.info("started API prefetch with %d queued actions remaining", len(action_queue))
 
             dt = time.perf_counter() - loop_start
             sleep_t = control_interval - dt
@@ -178,6 +329,7 @@ def main(cfg: ApiPolicyConfig) -> None:
         if robot.is_connected:
             robot.disconnect()
         session.close()
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 if __name__ == "__main__":

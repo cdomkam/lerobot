@@ -1,0 +1,23 @@
+{
+    "targets": {
+      "strawberry": {
+        "display_name": "Strawberry",
+        "policy_repo_id": "ofcourseistillloveyou/act-so101-strawberry-num40-chunk25",
+        "task": "Pick up the Strawberry and put it in the user's hand.",
+        "ood_detector_path": "models/ood_detector_strawberry.npz"
+      },
+      "oreo": {
+        "display_name": "Oreo",
+        "policy_repo_id": "ofcourseistillloveyou/act-so101-strawberry-num40-chunk25",
+        "task": "Pick up the Oreo and put it in the user's hand.",
+        "ood_detector_path": "models/ood_detector_oreo.npz"
+      },
+      "marshmallow": {
+        "display_name": "Marshmallow",
+        "policy_repo_id": "ofcourseistillloveyou/act-so101-strawberry-num40-chunk25",
+        "task": "Pick up the Marshmallow and put it in the user's hand.",
+        "ood_detector_path": "models/ood_detector_marshmallow.npz"
+      }
+    }
+  }
+  

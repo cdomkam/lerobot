@@ -13,6 +13,13 @@ ROBOT_ID="${ROBOT_ID:-so101_follower}"
 API_URL="${API_URL:-http://154.54.100.64:8080/infer}"
 FPS="${FPS:-50}"
 DURATION="${DURATION:-45}"
+PREFETCH_AT_ACTIONS="${PREFETCH_AT_ACTIONS:-20}"
+ACTION_LOG_EVERY_N_CHUNKS="${ACTION_LOG_EVERY_N_CHUNKS:-1}"
+API_STATE_UNITS="${API_STATE_UNITS:-radians}"
+API_ACTION_UNITS="${API_ACTION_UNITS:-radians}"
+GRIPPER_ACTION_UNITS="${GRIPPER_ACTION_UNITS:-minus1_1}"
+MAX_JOINT_STEP_DEG="${MAX_JOINT_STEP_DEG:-1.0}"
+MAX_GRIPPER_STEP="${MAX_GRIPPER_STEP:-2.0}"
 UV_PYTHON="${UV_PYTHON:-3.12}"
 
 CAMERA_FRONT_INDEX="${CAMERA_FRONT_INDEX:-0}"
@@ -39,6 +46,13 @@ echo "Robot port:  ${ROBOT_PORT}"
 echo "Control FPS: ${FPS}"
 echo "Camera FPS:  ${CAMERA_FPS}"
 echo "Duration:    ${DURATION}s"
+echo "Prefetch at: ${PREFETCH_AT_ACTIONS} queued actions"
+echo "Action log:  every ${ACTION_LOG_EVERY_N_CHUNKS} chunk(s)"
+echo "API state:   ${API_STATE_UNITS}"
+echo "API action:  ${API_ACTION_UNITS}"
+echo "Gripper:     ${GRIPPER_ACTION_UNITS}"
+echo "Joint limit: ${MAX_JOINT_STEP_DEG} deg/step"
+echo "Grip limit:  ${MAX_GRIPPER_STEP}/step"
 echo "Python:      ${UV_PYTHON}"
 echo
 echo "Keep one hand near power/USB. Press Ctrl-C to stop."
@@ -55,4 +69,11 @@ exec uv run --project "${LEROBOT_MAIN_DIR}" --python "${UV_PYTHON}" \
   --robot.cameras="${CAMERAS}" \
   --api_url="${API_URL}" \
   --fps="${FPS}" \
-  --duration="${DURATION}"
+  --duration="${DURATION}" \
+  --prefetch_at_actions="${PREFETCH_AT_ACTIONS}" \
+  --action_log_every_n_chunks="${ACTION_LOG_EVERY_N_CHUNKS}" \
+  --api_state_units="${API_STATE_UNITS}" \
+  --api_action_units="${API_ACTION_UNITS}" \
+  --gripper_action_units="${GRIPPER_ACTION_UNITS}" \
+  --max_joint_step_deg="${MAX_JOINT_STEP_DEG}" \
+  --max_gripper_step="${MAX_GRIPPER_STEP}"

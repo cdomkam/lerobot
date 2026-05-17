@@ -2,8 +2,6 @@
 # pyright: reportMissingImports=false
 """Voice-gated multi-policy food handoff runtime for SO-101."""
 
-from __future__ import annotations
-
 import logging
 import tempfile
 import time
@@ -12,6 +10,7 @@ from pathlib import Path
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.configs import parser
+from lerobot.configs.policies import PreTrainedConfig
 from lerobot.robots import so_follower  # noqa: F401
 from lerobot.rollout.configs import BaseStrategyConfig, RolloutConfig
 from lerobot.rollout.context import build_rollout_context
@@ -159,7 +158,9 @@ def main(cfg: FoodHandoffConfig) -> None:
                 reset_between_cycles(cfg, cycle)
                 continue
 
-            setattr(cfg.policy, "path", selected_policy.policy_repo_id)
+            cfg.policy = PreTrainedConfig.from_pretrained(selected_policy.policy_repo_id)
+            cfg.policy.pretrained_path = selected_policy.policy_repo_id
+            cfg.policy.device = cfg.device
             setattr(cfg, "task", selected_policy.task)
             ood_detector_path = base_ood_detector_path
             if selected_policy.ood_detector_path:

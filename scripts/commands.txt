@@ -21,8 +21,17 @@ RESUME=true \
 PUSH_TO_HUB=true \
 ./scripts/record_data.sh
 
+DATASET_REPO_ID="cdomkam/so101_recording_oreo" \
+TASK="Pick up the marshmellow and put it in the hand" \
+NUM_EPISODES=40 \
+RESUME=false \
+PUSH_TO_HUB=false \
+./scripts/record_data.sh
+
 uvx --from huggingface_hub hf auth login
-SOURCE_DATASET_ID=cdomkam/so101_recording_20260515_212609 ./scripts/upload_dataset_to_hf.sh
+SOURCE_DATASET_ID=cdomkam/so101_recording_marshmellow \
+TARGET_REPO_ID=ofcourseistillloveyou/so101_recording_marshmellow \
+./scripts/upload_dataset_to_hf.sh
 STEPS=3000 BATCH_SIZE=16 POLICY_REPO_ID=ofcourseistillloveyou/so-101-feed-me-act-v2 ./scripts/train_on_modal.sh
 JOB_NAME=so101-feed-me-act RESUME=true STEPS=3000 BATCH_SIZE=16 POLICY_REPO_ID=ofcourseistillloveyou/so-101-feed-me-act-v2 ./scripts/train_on_modal.sh
 
@@ -35,10 +44,10 @@ DURATION=45 \
 
 
 uv run python scripts/fit_ood_detector.py \
-  --dataset_repo_id ofcourseistillloveyou/so101_recording_20260516_105727 \
-  --policy_path    ofcourseistillloveyou/act-so101-recording-20260516 \
+  --dataset_repo_id ofcourseistillloveyou/so101_recording_strawberry_num40_20260516_161110 \
+  --policy_path    ofcourseistillloveyou/act-so101-strawberry-num40-chunk25 \
   --camera_name    front \
-  --output_path    models/ood_detector.npz
+  --output_path    models/strawberryood_detector.npz
 
 
   OD_TTS_EVERY_N=1 DURATION=3 ./scripts/run_policy_with_ood.sh
