@@ -71,9 +71,13 @@ for the actual robot cycle.
   `DURATION` seconds or until success is detected. After `DURATION`, the robot
   stops sending actions and the loop keeps checking side-camera success for
   `OPENAI_SUCCESS_GRACE_S` seconds before returning timeout.
-- **OOD scoring:** the ACT backbone encoder scores the configured `OOD_CAMERA`
-  against the target detector `.npz`. OOD events are logged and can trigger
-  ElevenLabs voice alerts, but they do not stop the policy.
+- **OOD scoring:** enabled by default. The ACT backbone encoder scores the
+  configured `OOD_CAMERA` against the selected target's detector `.npz` from
+  `config/food_policies.json`. OOD events are logged and can trigger ElevenLabs
+  voice alerts. After `OOD_FAILURE_AFTER_N` OOD detections, default `3`, the
+  cycle returns `ood_failure`, speaks the OOD phrase, stops the current policy,
+  records the failed action, and runs the normal reset pause before the next
+  voice request.
 - **Success detection:** the side camera, named `side`, maps to
   `CAMERA_SIDE_INDEX=1` and is the scene camera in the current setup. When
   OpenAI success is enabled, the loop sends an ordered short sequence of recent
@@ -270,7 +274,10 @@ Useful robot-mode environment knobs:
 ```bash
 CAMERA_SIDE_INDEX=1              # scene camera used for success
 CAMERA_FRONT_INDEX=0             # on-robot/front camera, used by OOD by default
+OOD_ENABLED=true                 # default; requires per-target detector files
 OOD_CAMERA=front
+OOD_FAILURE_AFTER_N=3            # OOD detections before failing/resetting cycle
+OOD_TTS_EVERY_N=3                # non-terminal OOD voice alert cadence
 OPENAI_SUCCESS_ENABLED=true      # default; required for automatic robot success
 OPENAI_SUCCESS_CONFIG_PATH=.env
 OPENAI_SUCCESS_EVERY_N=15        # minimum frames between OpenAI confirmation calls

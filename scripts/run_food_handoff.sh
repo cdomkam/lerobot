@@ -77,14 +77,15 @@ UV_PYTHON="${UV_PYTHON:-3.12}"
 FOOD_POLICY_CONFIG="${FOOD_POLICY_CONFIG:-config/food_policies.json}"
 VISION_CONFIG="${VISION_CONFIG:-config/food_handoff_vision.json}"
 OOD_DETECTOR_PATH="${OOD_DETECTOR_PATH:-models/ood_detector.npz}"
-OOD_ENABLED="${OOD_ENABLED:-false}"
+OOD_ENABLED="${OOD_ENABLED:-true}"
 OOD_CAMERA="${OOD_CAMERA:-front}"
 OOD_ENCODER="${OOD_ENCODER:-act_backbone}"
 OOD_EVERY_N="${OOD_EVERY_N:-5}"
 OOD_LOG_IN_DIST_EVERY_N="${OOD_LOG_IN_DIST_EVERY_N:-0}"
+OOD_FAILURE_AFTER_N="${OOD_FAILURE_AFTER_N:-3}"
 OOD_TTS_ENABLED="${OOD_TTS_ENABLED:-true}"
 OOD_TTS_CONFIG_PATH="${OOD_TTS_CONFIG_PATH:-.env}"
-OOD_TTS_EVERY_N="${OOD_TTS_EVERY_N:-30}"
+OOD_TTS_EVERY_N="${OOD_TTS_EVERY_N:-3}"
 OOD_TTS_QUEUE_MAX="${OOD_TTS_QUEUE_MAX:-25}"
 OPENAI_SUCCESS_ENABLED="${OPENAI_SUCCESS_ENABLED:-true}"
 OPENAI_SUCCESS_CONFIG_PATH="${OPENAI_SUCCESS_CONFIG_PATH:-.env}"
@@ -198,6 +199,7 @@ echo "Bootstrap policy:${BOOTSTRAP_POLICY_REPO_ID}"
 echo "OOD detector:    ${OOD_DETECTOR_PATH}"
 echo "OOD enabled:     ${OOD_ENABLED}"
 echo "OOD every N:     ${OOD_EVERY_N}"
+echo "OOD fail after:  ${OOD_FAILURE_AFTER_N}"
 echo "OpenAI success:  ${OPENAI_SUCCESS_ENABLED}"
 echo "OpenAI sequence: ${OPENAI_SUCCESS_SEQUENCE_FRAMES} frame(s), stride ${OPENAI_SUCCESS_SEQUENCE_STRIDE}"
 echo "OpenAI grace:    ${OPENAI_SUCCESS_GRACE_S}s"
@@ -269,6 +271,7 @@ exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --ood_encoder="${OOD_ENCODER}" \
   --ood_every_n="${OOD_EVERY_N}" \
   --ood_log_in_dist_every_n="${OOD_LOG_IN_DIST_EVERY_N}" \
+  --ood_failure_after_n="${OOD_FAILURE_AFTER_N}" \
   --ood_tts_enabled="${OOD_TTS_ENABLED}" \
   --ood_tts_config_path="${OOD_TTS_CONFIG_PATH}" \
   --ood_tts_every_n="${OOD_TTS_EVERY_N}" \

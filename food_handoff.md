@@ -20,7 +20,8 @@ scene can be reset before the next voice-triggered cycle.
 
 Review the checked-in runtime configs:
 
-- `config/food_policies.json` with the three Hugging Face policy repo ids.
+- `config/food_policies.json` with the three Hugging Face policy repo ids and
+  per-target `ood_detector_path` values.
 - `config/food_handoff_vision.json` with camera ROI and color thresholds. The
   current config uses camera index 1 / `side` for placement success because
   that scene view shows the food-in-hand state most clearly.
@@ -90,8 +91,8 @@ Debug-only overrides are available as `--no-voice` and
 2. `ORCHESTRATE`: ChatGPT calls `run_handoff(target)` for a clear Strawberry,
    Oreo, or Marshmallow request, calls `unsupported_item_requested(item)` for
    out-of-set foods, or asks a short clarification for ambiguity.
-3. `LOAD_OR_SELECT_POLICY`: The lower-level runner loads the policy repo id from
-   `food_policies.json`.
+3. `LOAD_OR_SELECT_POLICY`: The lower-level runner loads the policy repo id,
+   task prompt, and OOD detector path from `food_policies.json`.
 4. `FETCHING_TTS`: ElevenLabs speaks the fetching phrase for the selected food.
 5. `RUN_POLICY`: The selected LeRobot policy starts immediately. Policy actions
    stop at `DURATION`; the loop then enters a post-action OpenAI success grace
@@ -103,7 +104,9 @@ Debug-only overrides are available as `--no-voice` and
    solely in the gripper or on the tray/table. A stalled robot, wrong item, or
    user grab without robot placement must be rejected. Local ROI/color detection
    is only a candidate trigger/log signal, not an accepted success source.
-7. `OOD`: Speak an OOD phrase on scene OOD or unclassified requests.
+7. `OOD`: OOD is enabled by default. Detector hits are logged. After
+   `OOD_FAILURE_AFTER_N` detections, default 3, the loop speaks an OOD phrase,
+   returns `ood_failure`, stops the current policy, and proceeds to reset.
 8. `RESET_PAUSE`: Wait 5-10 seconds, default 7, so the scene can be reset.
 9. Return to `LISTEN` unless the max cycle count was reached or the process was
    interrupted.

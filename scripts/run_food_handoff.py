@@ -63,16 +63,17 @@ class FoodHandoffConfig(RolloutConfig):
     request_audio_seconds: float = 3.0
     request_audio_sample_rate: int = 16000
     request_recorder_command: str = ""
-    ood_enabled: bool = False
+    ood_enabled: bool = True
     ood_detector_path: str = ""
     ood_camera: str = "front"
     ood_encoder: str = "act_backbone"
     ood_every_n: int = 5
     ood_log_every_n: int = 1
     ood_log_in_dist_every_n: int = 0
+    ood_failure_after_n: int = 3
     ood_tts_enabled: bool = True
     ood_tts_config_path: str = ".env"
-    ood_tts_every_n: int = 30
+    ood_tts_every_n: int = 3
     ood_tts_queue_max: int = 25
     openai_success_enabled: bool = False
     openai_success_config_path: str = ".env"
@@ -118,6 +119,8 @@ def main(cfg: FoodHandoffConfig) -> None:
         raise ValueError("--openai_success_grace_s must be >= 0")
     if cfg.ood_every_n <= 0:
         raise ValueError("--ood_every_n must be positive")
+    if cfg.ood_failure_after_n < 0:
+        raise ValueError("--ood_failure_after_n must be non-negative")
 
     policy_config = load_food_policy_config(cfg.food_policy_config)
     vision_config = load_vision_config(cfg.vision_config)
@@ -544,6 +547,17 @@ def run_selected_policy(
                                 n_ood,
                                 max((pending_ood_frame + cfg.ood_every_n - 1) // cfg.ood_every_n, 1),
                             )
+                        if cfg.ood_failure_after_n > 0 and n_ood >= cfg.ood_failure_after_n:
+                            outcome = "ood_failure"
+                            logger.warning(
+                                "[OOD_FAILURE] target=%s frame=%d ood_detections=%d threshold=%d",
+                                selected_policy.target,
+                                pending_ood_frame,
+                                n_ood,
+                                cfg.ood_failure_after_n,
+                            )
+                            speak(tts_worker, choose_food_handoff_ood_phrase(), wait=True)
+                            break
                         if tts_worker is not None and n_ood % cfg.ood_tts_every_n == 0:
                             speak(tts_worker, choose_food_handoff_ood_phrase())
                     elif cfg.ood_log_in_dist_every_n > 0 and pending_ood_frame % cfg.ood_log_in_dist_every_n == 0:
