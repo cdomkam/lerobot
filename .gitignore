@@ -58,6 +58,13 @@ datasets/
 captures/
 outputs/
 recordings/
+!recordings/
+recordings/*
+!recordings/voice_requests/
+recordings/voice_requests/*
+!recordings/voice_requests/strawberry_request.wav
+!recordings/voice_requests/oreo_request.wav
+!recordings/voice_requests/marshmallow_request.wav
 logs/
 wandb/
 tmp/
