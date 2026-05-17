@@ -79,6 +79,7 @@ class RemoteACTPolicy:
         self._session = requests.Session()
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._pending_refill: Future[list[np.ndarray]] | None = None
+        self._prefetched_actions: list[np.ndarray] | None = None
         # Telemetry counters — useful for tests and for logging from the runner.
         self.refill_calls = 0
         self.refill_failures = 0
@@ -94,12 +95,18 @@ class RemoteACTPolicy:
         if self._pending_refill is not None:
             self._pending_refill.cancel()
             self._pending_refill = None
+        self._prefetched_actions = None
 
     def select_action(self, observation: dict) -> dict[str, float]:
         """Return one action. Refills queue from server when empty."""
         self._finish_pending_refill_if_ready()
         if not self._queue:
-            self._refill_blocking(observation)
+            if self._prefetched_actions is not None:
+                self._queue.extend(self._prefetched_actions)
+                self._prefetched_actions = None
+                logger.debug("installed prefetched remote ACT chunk (%d actions)", len(self._queue))
+            else:
+                self._refill_blocking(observation)
         if not self._queue:
             # Refill failed and on_refill_failure="hold" — return current state
             # as the goal so the safety clamp on the robot produces no motion.
@@ -108,6 +115,7 @@ class RemoteACTPolicy:
         if (
             self._prefetch_at_actions > 0
             and self._pending_refill is None
+            and self._prefetched_actions is None
             and 0 < len(self._queue) <= self._prefetch_at_actions
         ):
             self._pending_refill = self._executor.submit(self._request_actions, observation)
@@ -126,9 +134,8 @@ class RemoteACTPolicy:
                 raise RuntimeError(msg) from e
             logger.warning("%s — keeping existing queue", msg)
         else:
-            self._queue.clear()
-            self._queue.extend(actions)
-            logger.debug("installed prefetched remote ACT chunk (%d actions)", len(actions))
+            self._prefetched_actions = actions
+            logger.debug("prefetched remote ACT chunk ready (%d actions)", len(actions))
         finally:
             self._pending_refill = None
 

@@ -44,6 +44,12 @@ DEBUG_SEND_ACTIONS=false \
 EPISODE_TIME_S=10 \
 ./scripts/run_policy_on_robot.sh
 
+POLICY_REPO_ID=ofcourseistillloveyou/act-so101-strawberry-num40-chunk50 \
+POLICY_CHUNK_SIZE=50 \
+POLICY_N_ACTION_STEPS=50 \
+TASK="Pick up the Strawberry and put it in the user's hand." \
+./scripts/run_policy_on_robot.sh
+
 TOKEN="<api token>" \
 FPS=50 \
 CAMERA_FPS=30 \
@@ -56,6 +62,9 @@ ROBOT_ID=so101_follower \
 CAMERA_FRONT_INDEX=0 \
 CAMERA_SIDE_INDEX=1 \
 MAX_RELATIVE_TARGET=5.0 \
+CHUNK_SIZE=50 \
+N_ACTION_STEPS=50 \
+PREFETCH_AT_ACTIONS=40 \
 LOG_PATH=/tmp/remote-act.jsonl \
 ./scripts/run_remote_act.sh
 

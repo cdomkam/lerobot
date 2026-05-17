@@ -53,6 +53,28 @@ echo "Python:          ${UV_PYTHON}"
 echo
 echo "Keep one hand near power/USB. Press Ctrl-C to stop the policy."
 
+POLICY_DEBUG_ARGS=(
+  --policy.path="${POLICY_REPO_ID}"
+  --policy.device="${POLICY_DEVICE}"
+  --policy.n_action_steps="${POLICY_N_ACTION_STEPS}"
+)
+POLICY_RECORD_ARGS=(
+  --policy.type="${POLICY_TYPE}"
+  --policy.pretrained_path="${POLICY_REPO_ID}"
+  --policy.device="${POLICY_DEVICE}"
+  --policy.n_action_steps="${POLICY_N_ACTION_STEPS}"
+)
+UVX_FROM="lerobot[feetech]"
+UV_RUN_EXTRAS=(--extra dataset --extra hardware --extra viz --extra feetech)
+if [[ "${POLICY_TYPE}" == "diffusion" ]]; then
+  UVX_FROM="lerobot[feetech,diffusion]"
+  UV_RUN_EXTRAS+=(--extra diffusion)
+fi
+if [[ "${POLICY_TYPE}" != "diffusion" ]]; then
+  POLICY_DEBUG_ARGS+=(--policy.chunk_size="${POLICY_CHUNK_SIZE}")
+  POLICY_RECORD_ARGS+=(--policy.chunk_size="${POLICY_CHUNK_SIZE}")
+fi
+
 if [[ "${DEBUG_ACTIONS}" == "true" ]]; then
   if [[ ! -d "${LEROBOT_MAIN_DIR}" ]]; then
     echo "Missing latest LeRobot checkout: ${LEROBOT_MAIN_DIR}" >&2
@@ -62,13 +84,10 @@ if [[ "${DEBUG_ACTIONS}" == "true" ]]; then
 
   cd "${LEROBOT_MAIN_DIR}"
   exec uv run --project "${LEROBOT_MAIN_DIR}" --python "${UV_PYTHON}" \
-    --extra dataset --extra hardware --extra viz --extra feetech \
+    "${UV_RUN_EXTRAS[@]}" \
     python "${ROOT_DIR}/scripts/debug_policy_actions.py" \
     --strategy.type=base \
-    --policy.path="${POLICY_REPO_ID}" \
-    --policy.device="${POLICY_DEVICE}" \
-    --policy.chunk_size="${POLICY_CHUNK_SIZE}" \
-    --policy.n_action_steps="${POLICY_N_ACTION_STEPS}" \
+    "${POLICY_DEBUG_ARGS[@]}" \
     --device="${POLICY_DEVICE}" \
     --robot.type=so101_follower \
     --robot.port="${ROBOT_PORT}" \
@@ -82,16 +101,12 @@ if [[ "${DEBUG_ACTIONS}" == "true" ]]; then
     --log_every_n="${DEBUG_LOG_EVERY_N}"
 fi
 
-exec uvx --python "${UV_PYTHON}" --from 'lerobot[feetech]' lerobot-record \
+exec uvx --python "${UV_PYTHON}" --from "${UVX_FROM}" lerobot-record \
   --robot.type=so101_follower \
   --robot.port="${ROBOT_PORT}" \
   --robot.id="${ROBOT_ID}" \
   --robot.cameras="${CAMERAS}" \
-  --policy.type="${POLICY_TYPE}" \
-  --policy.pretrained_path="${POLICY_REPO_ID}" \
-  --policy.device="${POLICY_DEVICE}" \
-  --policy.chunk_size="${POLICY_CHUNK_SIZE}" \
-  --policy.n_action_steps="${POLICY_N_ACTION_STEPS}" \
+  "${POLICY_RECORD_ARGS[@]}" \
   --dataset.repo_id="${DATASET_REPO_ID}" \
   --dataset.single_task="${TASK}" \
   --dataset.fps="${FPS}" \
