@@ -49,6 +49,29 @@ FOOD_HANDOFF_OOD_PHRASES = (
     "That scene or request seems out of distribution; I will not guess.",
 )
 
+UNSUPPORTED_ITEM_PHRASES = (
+    "I am terribly sorry, but {item} is not among today's provisions.",
+    "Regrettably, {item} is not on my serving list at present.",
+    "I do beg your pardon, but I have not been furnished with {item}.",
+    "Alas, {item} is beyond the bounds of my current pantry.",
+    "I am afraid {item} is not available from this modest tray.",
+    "Very sorry, but I can only oblige with Strawberry, Oreo, or Marshmallow.",
+    "Pardon me, {item} is not one of the delicacies I can presently provide.",
+    "I should like to help, but {item} is not in my appointed repertoire.",
+    "Forgive me, but {item} has not been placed under my charge today.",
+    "I'm afraid the menu is rather strict: Strawberry, Oreo, or Marshmallow.",
+    "Noted, but {item} is not stocked in my little establishment.",
+    "I say, {item} sounds splendid, but it is not available to me.",
+    "Sadly, {item} is not in the collection I am permitted to serve.",
+    "With apologies, I cannot produce {item}; my choices are quite limited.",
+    "I'm afraid I must decline {item}; it is not among the supported items.",
+    "Most regretfully, {item} is outside my present culinary brief.",
+    "I cannot offer {item} just now, though I can manage Strawberry, Oreo, or Marshmallow.",
+    "A fine thought, but {item} is not part of today's robot service.",
+    "I am sorry to report that {item} is not aboard the tray.",
+    "By your leave, I must stick to Strawberry, Oreo, and Marshmallow today.",
+)
+
 SUCCESS_PHRASES = (
     "Very good. The {target} has been delivered to your hand.",
     "There we are. The {target} now rests safely in your hand.",
@@ -117,6 +140,18 @@ def choose_food_handoff_ood_phrase(rng: random.Random | None = None) -> str:
     """Return an OOD/unclear-request phrase for the food handoff flow."""
     rng = rng or random
     return rng.choice(FOOD_HANDOFF_OOD_PHRASES)
+
+
+def choose_unsupported_item_phrase(
+    item: str = "that item",
+    rng: random.Random | None = None,
+) -> str:
+    """Return a British-English phrase for unsupported food requests."""
+    rng = rng or random
+    clean_item = " ".join(item.strip().split()) if item else ""
+    if not clean_item:
+        clean_item = "that item"
+    return rng.choice(UNSUPPORTED_ITEM_PHRASES).format(item=clean_item)
 
 
 def choose_success_phrase(target: str, rng: random.Random | None = None) -> str:

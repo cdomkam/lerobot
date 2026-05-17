@@ -30,18 +30,21 @@ from lerobot_ood import (
     OODDetector,
     TargetSuccessDetector,
     canonicalize_target,
+    choose_unsupported_item_phrase,
     choose_food_handoff_ood_phrase,
     choose_fetching_phrase,
     choose_success_phrase,
     classify_food_request,
     extract_camera_frame,
     confirm_food_handoff_success,
+    is_probable_unsupported_food_request,
     load_elevenlabs_stt_config,
     load_elevenlabs_tts_config,
     load_food_policy_config,
     load_openai_vision_config,
     load_vision_config,
     transcribe_audio_file,
+    unsupported_item_label,
 )
 from lerobot_ood.audio import record_wav
 
@@ -80,6 +83,14 @@ class FoodHandoffConfig(RolloutConfig):
     result_json_path: str = ""
     test_policy_steps: int = 5
     test_success_after_steps: int = 3
+
+
+@dataclass(frozen=True)
+class ClassifiedRequest:
+    target: str | None
+    transcript: str
+    unsupported_item: bool = False
+    unsupported_item_label: str = "that item"
 
 
 @parser.wrap()
@@ -155,17 +166,24 @@ def main(cfg: FoodHandoffConfig) -> None:
             if selected_target is None:
                 if stt_config is None:
                     raise ValueError("--no-stt requires --target strawberry|oreo|marshmallow")
-                selected_target = listen_and_classify_request(cfg, stt_config)
+                request = listen_and_classify_request(cfg, stt_config)
+                selected_target = request.target
                 if selected_target is None:
                     logger.warning("[REQUEST] could not classify target")
-                    speak(tts_worker, choose_food_handoff_ood_phrase(), wait=True)
-                    logger.info("[CYCLE] complete cycle=%d outcome=ood_unclassified", cycle)
+                    if request.unsupported_item:
+                        phrase = choose_unsupported_item_phrase(request.unsupported_item_label)
+                        outcome = "unsupported_item"
+                    else:
+                        phrase = choose_food_handoff_ood_phrase()
+                        outcome = "ood_unclassified"
+                    speak(tts_worker, phrase, wait=True)
+                    logger.info("[CYCLE] complete cycle=%d outcome=%s", cycle, outcome)
                     cycle_results.append(
                         handoff_result(
                             cycle=cycle,
                             target=selected_target,
                             policy=None,
-                            outcome="ood_unclassified",
+                            outcome=outcome,
                         )
                     )
                     write_result_json(cfg.result_json_path, cycle_results)
@@ -269,7 +287,7 @@ def main(cfg: FoodHandoffConfig) -> None:
         logger.info("Handoff loop stopped after %d cycle(s)", cycle)
 
 
-def listen_and_classify_request(cfg: FoodHandoffConfig, stt_config) -> str | None:
+def listen_and_classify_request(cfg: FoodHandoffConfig, stt_config) -> ClassifiedRequest:
     if cfg.test_mode and cfg.test_audio_path:
         transcript = transcribe_audio_file(
             stt_config,
@@ -278,7 +296,12 @@ def listen_and_classify_request(cfg: FoodHandoffConfig, stt_config) -> str | Non
         )
         target = classify_food_request(transcript)
         logger.info("[REQUEST] test_audio=%s transcript=%r target=%s", cfg.test_audio_path, transcript, target)
-        return target
+        return ClassifiedRequest(
+            target=target,
+            transcript=transcript,
+            unsupported_item=target is None and is_probable_unsupported_food_request(transcript),
+            unsupported_item_label=unsupported_item_label(transcript),
+        )
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         audio_path = Path(f.name)
@@ -298,7 +321,12 @@ def listen_and_classify_request(cfg: FoodHandoffConfig, stt_config) -> str | Non
         )
         target = classify_food_request(transcript)
         logger.info("[REQUEST] transcript=%r target=%s", transcript, target)
-        return target
+        return ClassifiedRequest(
+            target=target,
+            transcript=transcript,
+            unsupported_item=target is None and is_probable_unsupported_food_request(transcript),
+            unsupported_item_label=unsupported_item_label(transcript),
+        )
     finally:
         try:
             audio_path.unlink()
@@ -504,27 +532,30 @@ def run_selected_policy(
                 try:
                     openai_result = pending_openai_success.result()
                 except Exception as exc:
-                    if opencv_candidate:
-                        logger.warning(
-                            "[OPENAI_SUCCESS] async confirmation failed; accepting OpenCV success: %s",
-                            exc,
-                        )
-                        success_confirmed = True
-                        success_source = "opencv_openai_error"
-                    else:
-                        logger.warning("[OPENAI_SUCCESS] async periodic check failed: %s", exc)
+                    logger.warning(
+                        "[OPENAI_SUCCESS] async check failed; not accepting OpenCV candidate "
+                        "while OpenAI success is enabled: %s",
+                        exc,
+                    )
                 else:
                     logger.info(
                         "[OPENAI_SUCCESS] frame=%d success=%s confidence=%.3f hand=%s "
-                        "visible=%s in_gripper=%s on_tray=%s opencv_candidate=%s "
-                        "opencv_score=%.3f reason=%r",
+                        "robot=%s gripper_near_hand=%s robot_placing=%s visible=%s "
+                        "in_user_hand=%s in_gripper=%s on_tray=%s correct_food=%s "
+                        "user_grabbed=%s opencv_candidate=%s opencv_score=%.3f reason=%r",
                         frame_id,
                         openai_result.success,
                         openai_result.confidence,
                         openai_result.user_hand_present,
+                        openai_result.robot_visible,
+                        openai_result.robot_gripper_near_user_hand,
+                        openai_result.robot_placing_target_in_user_hand,
                         openai_result.target_food_visible,
+                        openai_result.target_food_in_user_hand,
                         openai_result.target_food_in_robot_gripper,
                         openai_result.target_food_on_tray,
+                        openai_result.correct_target_food,
+                        openai_result.user_grabbing_without_robot_placement,
                         opencv_candidate,
                         opencv_score,
                         openai_result.reason,
@@ -561,8 +592,13 @@ def run_selected_policy(
                         success_result.score,
                     )
             elif local_success_candidate:
-                success_confirmed = True
-                success_source = "opencv"
+                logger.info(
+                    "[TASK_SUCCESS_CANDIDATE_LOCAL_ONLY] target=%s frame=%d "
+                    "opencv_score=%.3f openai_disabled=true; not accepting as success",
+                    selected_policy.target,
+                    n_seen,
+                    success_result.score,
+                )
 
             if success_confirmed:
                 success = True

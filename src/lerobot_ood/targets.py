@@ -15,6 +15,37 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "marshmallow": ("marshmallow", "marshmallows", "marshmellow", "marshmellows"),
 }
 
+REQUEST_WORDS = {
+    "bring",
+    "fetch",
+    "get",
+    "give",
+    "grab",
+    "have",
+    "like",
+    "please",
+    "snack",
+    "food",
+    "item",
+    "eat",
+    "want",
+}
+
+UNSUPPORTED_ITEM_FILLER_WORDS = REQUEST_WORDS | {
+    "a",
+    "an",
+    "and",
+    "can",
+    "could",
+    "i",
+    "me",
+    "my",
+    "the",
+    "to",
+    "would",
+    "you",
+}
+
 
 @dataclass(frozen=True)
 class FoodPolicy:
@@ -50,15 +81,37 @@ def canonicalize_target(value: str | None) -> str | None:
 
 def classify_food_request(transcript: str) -> str | None:
     """Map a short user request transcript to a single food enum."""
+    matches = match_food_targets(transcript)
+    if len(matches) == 1:
+        return next(iter(matches))
+    return None
+
+
+def match_food_targets(transcript: str) -> set[str]:
+    """Return every supported food target mentioned in a transcript."""
     tokens = set(re.findall(r"[a-z0-9]+", transcript.lower()))
-    matches = {
+    return {
         target
         for target, aliases in ALIASES.items()
         if any(alias.lower() in tokens for alias in aliases)
     }
-    if len(matches) == 1:
-        return next(iter(matches))
-    return None
+
+
+def is_probable_unsupported_food_request(transcript: str) -> bool:
+    """Heuristic for requests that ask for food outside the supported set."""
+    tokens = set(re.findall(r"[a-z0-9]+", transcript.lower()))
+    if not tokens or match_food_targets(transcript):
+        return False
+    return bool(tokens & REQUEST_WORDS)
+
+
+def unsupported_item_label(transcript: str) -> str:
+    """Extract a short display label for an unsupported requested item."""
+    words = re.findall(r"[a-z0-9]+", transcript.lower())
+    candidates = [word for word in words if word not in UNSUPPORTED_ITEM_FILLER_WORDS]
+    if not candidates:
+        return "that item"
+    return " ".join(candidates[-3:])
 
 
 def load_food_policy_config(path: str | Path) -> FoodPolicyConfig:

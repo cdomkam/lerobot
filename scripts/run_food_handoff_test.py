@@ -14,11 +14,14 @@ from lerobot_ood import (
     choose_fetching_phrase,
     choose_food_handoff_ood_phrase,
     choose_success_phrase,
+    choose_unsupported_item_phrase,
     classify_food_request,
+    is_probable_unsupported_food_request,
     load_elevenlabs_stt_config,
     load_elevenlabs_tts_config,
     load_food_policy_config,
     transcribe_audio_file,
+    unsupported_item_label,
 )
 
 logger = logging.getLogger("run_food_handoff_test")
@@ -101,13 +104,19 @@ def main() -> None:
                 )
                 if target is None:
                     logger.warning("[REQUEST] could not classify target")
-                    speak(tts_worker, choose_food_handoff_ood_phrase(), wait=True)
-                    logger.info("[CYCLE] complete cycle=%d outcome=ood_unclassified", cycle)
+                    if is_probable_unsupported_food_request(transcript):
+                        phrase = choose_unsupported_item_phrase(unsupported_item_label(transcript))
+                        outcome = "unsupported_item"
+                    else:
+                        phrase = choose_food_handoff_ood_phrase()
+                        outcome = "ood_unclassified"
+                    speak(tts_worker, phrase, wait=True)
+                    logger.info("[CYCLE] complete cycle=%d outcome=%s", cycle, outcome)
                     cycle_results.append(
                         {
                             "cycle": cycle,
                             "target": target,
-                            "outcome": "ood_unclassified",
+                            "outcome": outcome,
                             "success": False,
                         }
                     )

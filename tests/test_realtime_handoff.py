@@ -73,6 +73,31 @@ class RealtimeHandoffTest(unittest.TestCase):
         self.assertTrue(result["spoken_by_control_loop"])
         self.assertEqual(result["policy_repo_id"], "org/strawberry")
 
+    def test_session_config_includes_unsupported_item_tool(self):
+        config = run_clanker.PolicyConfig(
+            target="strawberry",
+            path=Path("food_policies.json"),
+            display_name="Strawberry",
+            policy_repo_id="org/strawberry",
+            task="Pick Strawberry",
+        )
+        runner = run_clanker.PolicyRunner({"strawberry": config}, dry_run=True, dry_run_seconds=0)
+        clanker = run_clanker.RealtimeClanker(
+            api_key="sk-test",
+            model="gpt-test",
+            voice="",
+            runner=runner,
+            tts_worker=None,
+            greeting=False,
+            barge_in=False,
+        )
+
+        tools = {tool["name"]: tool for tool in clanker.session_config()["tools"]}
+
+        self.assertIn("run_handoff", tools)
+        self.assertIn("unsupported_item_requested", tools)
+        self.assertNotIn("apple", tools["run_handoff"]["parameters"]["properties"]["target"]["enum"])
+
 
 if __name__ == "__main__":
     unittest.main()

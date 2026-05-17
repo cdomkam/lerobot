@@ -88,14 +88,19 @@ Debug-only overrides are available as `--no-voice` and
 1. `LISTEN`: ChatGPT Realtime listens to the microphone and transcribes the
    user request.
 2. `ORCHESTRATE`: ChatGPT calls `run_handoff(target)` for a clear Strawberry,
-   Oreo, or Marshmallow request, or asks a short clarification for ambiguity.
+   Oreo, or Marshmallow request, calls `unsupported_item_requested(item)` for
+   out-of-set foods, or asks a short clarification for ambiguity.
 3. `LOAD_OR_SELECT_POLICY`: The lower-level runner loads the policy repo id from
    `food_policies.json`.
 4. `FETCHING_TTS`: ElevenLabs speaks the fetching phrase for the selected food.
 5. `RUN_POLICY`: The selected LeRobot policy starts immediately.
-6. `SUCCESS`: GPT-5.4-nano checks side-camera frames in the background for the
-   target food in the user's hand. Local ROI/color success remains the fallback
-   when OpenAI success is disabled.
+6. `SUCCESS`: GPT-5.4-nano checks side-camera frames in the background. Success
+   requires the correct target food in the user's hand plus visible evidence that
+   the robot gripper is near the hand and actively placing or just releasing that
+   food. A stalled robot, wrong item, item only on the tray, item only in the
+   gripper, or user grab without robot placement must be rejected. Local
+   ROI/color detection is only a candidate trigger/log signal, not an accepted
+   success source.
 7. `OOD`: Speak an OOD phrase on scene OOD or unclassified requests.
 8. `RESET_PAUSE`: Wait 5-10 seconds, default 7, so the scene can be reset.
 9. Return to `LISTEN` unless the max cycle count was reached or the process was

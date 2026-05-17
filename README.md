@@ -32,12 +32,8 @@ Strawberry, Oreo, or Marshmallow. The tool runs one complete deterministic
 handoff cycle, including ElevenLabs fetching/success speech, policy execution,
 side-camera success checks, and reset.
 
-OpenAI success confirmation is enabled by default in production. To disable it
-for a debug run:
-
-```bash
-OPENAI_SUCCESS_ENABLED=false ./scripts/run_realtime_food_handoff.sh
-```
+OpenAI success confirmation is enabled by default and is required for automatic
+robot success.
 
 ## Core Run Paths
 
@@ -63,6 +59,9 @@ for the actual robot cycle.
 - **Speech request:** ChatGPT Realtime transcribes the microphone stream and
   chooses the target through a `run_handoff` tool call. Realtime text output is
   spoken locally through ElevenLabs; Realtime audio output is not used.
+- **Unsupported requests:** if the user asks for anything outside Strawberry,
+  Oreo, or Marshmallow, Realtime calls `unsupported_item_requested` and the local
+  control path speaks a randomized unavailable-item phrase through ElevenLabs.
 - **Policy trigger:** once Realtime calls `run_handoff(target)`, the lower-level
   runner speaks the fetching phrase and starts the selected policy immediately.
 - **Policy selection:** `config/food_policies.json` maps the classified food to
@@ -76,11 +75,15 @@ for the actual robot cycle.
   `CAMERA_SIDE_INDEX=1` and is the scene camera in the current setup. When
   OpenAI success is enabled, the loop sends that frame to `gpt-5.4-nano` every
   `OPENAI_SUCCESS_EVERY_N` frames and immediately on any local ROI/color success
-  candidate. Success is accepted when the model says the target food is in the
-  user's hand with at least `OPENAI_SUCCESS_MIN_CONFIDENCE` from `.env` (default
-  `0.70`). If OpenAI is disabled, the local ROI/color detector is the fallback
-  success signal. If OpenAI fails on a local candidate, the runner logs a
-  warning and accepts the local result.
+  candidate. Success is accepted only when the model sees the correct target
+  food in the user's hand and visible evidence that the robot gripper is near the
+  hand and actively placing or just releasing that food. It is not success if the
+  robot is stalled, absent, holding the wrong item, holding the item away from
+  the hand, or if the user grabs the item without robot placement. Confidence
+  must be at least `OPENAI_SUCCESS_MIN_CONFIDENCE` from `.env` (default `0.70`).
+  Local OpenCV ROI/color detection is only a candidate trigger/log signal; it is
+  not accepted as success when OpenAI is disabled or when OpenAI confirmation
+  fails.
 - **Reset/repeat:** robot mode loops until interrupted by default. Test mode
   runs one cycle by default. Use `--max-cycles N` to bound either mode, or
   `--max-cycles 0` for an unlimited loop.
@@ -183,12 +186,7 @@ Run the Realtime robot loop and ask for any configured food, for example
 ./scripts/run_realtime_food_handoff.sh
 ```
 
-Disable OpenAI success confirmation for a debug run:
-
-```bash
-OPENAI_SUCCESS_ENABLED=false \
-./scripts/run_realtime_food_handoff.sh
-```
+For robot success testing, keep OpenAI success confirmation enabled.
 
 ### 3. Test A Set Of Voice Requests, No Robot
 
@@ -234,12 +232,7 @@ Marshmallow during the next:
 ./scripts/run_realtime_food_handoff.sh
 ```
 
-Disable OpenAI success confirmation for a debug run:
-
-```bash
-OPENAI_SUCCESS_ENABLED=false \
-./scripts/run_realtime_food_handoff.sh
-```
+For robot success testing, keep OpenAI success confirmation enabled.
 
 The production robot loop is the same command without `--max-cycles`; stop it
 with Ctrl-C:
@@ -257,7 +250,7 @@ Expected successful logs include:
 [REQUEST] target=strawberry policy=...
 [TTS] queue wait=True phrase='...Strawberry...'
 [POLICY] starting target=strawberry ...
-[OPENAI_SUCCESS] frame=... success=True ...
+[OPENAI_SUCCESS] frame=... success=True ... robot_placing=True ...
 [TASK_SUCCESS] target=strawberry frame=... source=openai opencv_score=...
 [TTS] queue wait=True phrase='...Strawberry...'
 [CYCLE] complete cycle=1 outcome=success
@@ -274,7 +267,7 @@ Useful robot-mode environment knobs:
 CAMERA_SIDE_INDEX=1              # scene camera used for success
 CAMERA_FRONT_INDEX=0             # on-robot/front camera, used by OOD by default
 OOD_CAMERA=front
-OPENAI_SUCCESS_ENABLED=true      # default; set false only for debug runs
+OPENAI_SUCCESS_ENABLED=true      # default; required for automatic robot success
 OPENAI_SUCCESS_CONFIG_PATH=.env
 OPENAI_SUCCESS_EVERY_N=15        # minimum frames between OpenAI confirmation calls
 DURATION=30

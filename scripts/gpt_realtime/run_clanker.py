@@ -56,6 +56,7 @@ sys.modules[_TTS_SPEC.name] = _tts
 _TTS_SPEC.loader.exec_module(_tts)
 ElevenLabsTTSWorker = _tts.ElevenLabsTTSWorker
 load_elevenlabs_tts_config = _tts.load_elevenlabs_tts_config
+choose_unsupported_item_phrase = _tts.choose_unsupported_item_phrase
 
 SYSTEM_PROMPT = """\
 You are Alfred, a polite, funny robot butler. You listen to the user and orchestrate
@@ -68,15 +69,17 @@ phrasing such as "very good", "right you are", "splendid", "I say", and "shall".
 When the user clearly asks for one of the three snacks, call run_handoff with that
 target. If the request is ambiguous, ask a short clarifying question instead of
 calling the tool. If the user asks for anything outside strawberry, marshmallow, or
-oreo, politely explain that your tray is limited to those three delicacies.
+oreo, call unsupported_item_requested with the requested item. Do not improvise
+your own unavailable-item line; the local control loop will speak it.
 
 The run_handoff tool speaks the fetching line through ElevenLabs, immediately runs
 the requested robot policy, checks side-camera success using GPT-5.4-nano in the
 background, speaks the final success phrase through ElevenLabs, and returns
 structured status. While the tool call is pending, the microphone is muted. After a
 successful tool result, remain silent because the control loop has already spoken
-the outcome. If the tool returns failure or error, briefly apologise and name the
-problem.
+the outcome. After an unsupported_item_requested result, remain silent because the
+control loop has already spoken the unavailable-item line. If the tool returns
+failure or error, briefly apologise and name the problem.
 """
 
 
@@ -900,7 +903,7 @@ class RealtimeClanker:
         )
 
     def handle_function_call(self, name: str, call_id: str, arguments: str) -> None:
-        if name != "run_handoff" or not call_id:
+        if name not in {"run_handoff", "unsupported_item_requested"} or not call_id:
             return
         with self.send_lock:
             if call_id in self.handled_call_ids:
@@ -909,7 +912,7 @@ class RealtimeClanker:
         self.mark_tool_pending()
         threading.Thread(
             target=self._run_tool_and_respond,
-            args=(call_id, arguments),
+            args=(name, call_id, arguments),
             name=f"clanker-tool-{call_id}",
             daemon=True,
         ).start()
@@ -935,11 +938,23 @@ class RealtimeClanker:
                 time.monotonic() + estimated_s,
             )
 
-    def _run_tool_and_respond(self, call_id: str, arguments: str) -> None:
+    def _run_tool_and_respond(self, name: str, call_id: str, arguments: str) -> None:
         try:
             payload = json.loads(arguments or "{}")
-            target = str(payload.get("target", ""))
-            result = self.runner.run(target)
+            if name == "run_handoff":
+                target = str(payload.get("target", ""))
+                result = self.runner.run(target)
+            else:
+                item = str(payload.get("item", "")).strip() or "that item"
+                phrase = choose_unsupported_item_phrase(item)
+                self.speak_text(phrase)
+                result = {
+                    "status": "unsupported_item",
+                    "ok": False,
+                    "success": False,
+                    "item": item,
+                    "spoken_by_control_loop": True,
+                }
         except Exception as exc:
             result = {"status": "error", "ok": False, "error": str(exc)}
         try:
@@ -1002,6 +1017,26 @@ class RealtimeClanker:
                             }
                         },
                         "required": ["target"],
+                        "additionalProperties": False,
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "unsupported_item_requested",
+                    "description": (
+                        "Speak one local Queen's English unavailable-item phrase through "
+                        "ElevenLabs when the user asks for a snack outside strawberry, "
+                        "marshmallow, or oreo. Does not run the robot."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "item": {
+                                "type": "string",
+                                "description": "The unsupported item the user asked for.",
+                            }
+                        },
+                        "required": ["item"],
                         "additionalProperties": False,
                     },
                 }

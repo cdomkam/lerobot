@@ -19,21 +19,25 @@ spec.loader.exec_module(tts)
     FETCHING_PHRASES,
     STRAWBERRY_OOD_PHRASES,
     SUCCESS_PHRASES,
+    UNSUPPORTED_ITEM_PHRASES,
     ElevenLabsTTSConfig,
     ElevenLabsTTSWorker,
     choose_fetching_phrase,
     choose_strawberry_ood_phrase,
     choose_success_phrase,
+    choose_unsupported_item_phrase,
     load_elevenlabs_tts_config,
 ) = (
     tts.FETCHING_PHRASES,
     tts.STRAWBERRY_OOD_PHRASES,
     tts.SUCCESS_PHRASES,
+    tts.UNSUPPORTED_ITEM_PHRASES,
     tts.ElevenLabsTTSConfig,
     tts.ElevenLabsTTSWorker,
     tts.choose_fetching_phrase,
     tts.choose_strawberry_ood_phrase,
     tts.choose_success_phrase,
+    tts.choose_unsupported_item_phrase,
     tts.load_elevenlabs_tts_config,
 )
 
@@ -68,6 +72,12 @@ class TTSTest(unittest.TestCase):
         self.assertTrue(all("hand" not in phrase.lower() for phrase in FETCHING_PHRASES))
         phrase = choose_fetching_phrase("Strawberry")
         self.assertIn("Strawberry", phrase)
+
+    def test_unsupported_item_phrase_inventory_has_twenty_formattable_phrases(self):
+        self.assertEqual(len(UNSUPPORTED_ITEM_PHRASES), 20)
+        self.assertTrue(all(phrase for phrase in UNSUPPORTED_ITEM_PHRASES))
+        phrase = choose_unsupported_item_phrase("apple")
+        self.assertTrue("apple" in phrase or "Strawberry, Oreo, or Marshmallow" in phrase)
 
     def test_load_config_from_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:

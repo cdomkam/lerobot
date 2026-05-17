@@ -32,10 +32,15 @@ class OpenAISuccessResult:
     success: bool
     confidence: float
     user_hand_present: bool
+    robot_visible: bool
+    robot_gripper_near_user_hand: bool
+    robot_placing_target_in_user_hand: bool
     target_food_visible: bool
     target_food_in_user_hand: bool
     target_food_in_robot_gripper: bool
     target_food_on_tray: bool
+    correct_target_food: bool
+    user_grabbing_without_robot_placement: bool
     reason: str
     raw_text: str
 
@@ -73,17 +78,26 @@ def confirm_food_handoff_success(
     target_display_name: str,
     opener=urllib.request.urlopen,
 ) -> OpenAISuccessResult:
-    """Ask a vision model whether the target food is in the user's hand."""
+    """Ask a vision model whether the robot is placing the target food in the user's hand."""
     prompt = (
         "You are evaluating an SO-101 robot food handoff. Judge only the image. "
         "The user hand is a human hand, not the robot gripper. "
         f"The target food is: {target_display_name}. "
-        "Success means the target food is being held by, resting on, or clearly placed in the "
-        "human/user hand. It is not success if the food is only in the robot gripper or on the tray. "
+        "Be strict: success requires visible evidence that the robot is actively placing or has "
+        "just released the correct target food into the human/user hand. The robot arm or gripper "
+        "must be visible and near the user's hand, and the correct target food must be in or on "
+        "the user's hand. It is not success if the robot is stalled, absent, too far away, holding "
+        "nothing, holding the wrong item, or if the user appears to have grabbed the food from the "
+        "tray, table, or robot without a robot placement. It is not success if the food is only in "
+        "the robot gripper or only on the tray/table. If unsure, set success-relevant booleans false "
+        "and use low confidence. "
         "Return strict JSON only with this shape: "
-        '{"user_hand_present":true,"target_food_visible":true,'
-        '"target_food_in_user_hand":true,"target_food_in_robot_gripper":false,'
-        '"target_food_on_tray":false,"confidence":0.0,"reason":"short"}'
+        '{"user_hand_present":true,"robot_visible":true,'
+        '"robot_gripper_near_user_hand":true,"robot_placing_target_in_user_hand":true,'
+        '"target_food_visible":true,"target_food_in_user_hand":true,'
+        '"target_food_in_robot_gripper":false,"target_food_on_tray":false,'
+        '"correct_target_food":true,"user_grabbing_without_robot_placement":false,'
+        '"confidence":0.0,"reason":"short"}'
     )
     payload = {
         "model": config.model,
@@ -127,16 +141,42 @@ def confirm_food_handoff_success(
     raw_text = _extract_response_text(response_payload)
     parsed = _parse_json_object(raw_text)
     confidence = float(parsed.get("confidence", 0.0) or 0.0)
+    user_hand_present = bool(parsed.get("user_hand_present"))
+    robot_visible = bool(parsed.get("robot_visible"))
+    robot_gripper_near_user_hand = bool(parsed.get("robot_gripper_near_user_hand"))
+    robot_placing_target_in_user_hand = bool(parsed.get("robot_placing_target_in_user_hand"))
+    target_food_visible = bool(parsed.get("target_food_visible"))
     target_food_in_user_hand = bool(parsed.get("target_food_in_user_hand"))
-    success = target_food_in_user_hand and confidence >= config.min_confidence
+    target_food_on_tray = bool(parsed.get("target_food_on_tray"))
+    correct_target_food = bool(parsed.get("correct_target_food", target_food_visible))
+    user_grabbing_without_robot_placement = bool(
+        parsed.get("user_grabbing_without_robot_placement")
+    )
+    success = (
+        user_hand_present
+        and robot_visible
+        and robot_gripper_near_user_hand
+        and robot_placing_target_in_user_hand
+        and target_food_visible
+        and target_food_in_user_hand
+        and correct_target_food
+        and not target_food_on_tray
+        and not user_grabbing_without_robot_placement
+        and confidence >= config.min_confidence
+    )
     return OpenAISuccessResult(
         success=success,
         confidence=confidence,
-        user_hand_present=bool(parsed.get("user_hand_present")),
-        target_food_visible=bool(parsed.get("target_food_visible")),
+        user_hand_present=user_hand_present,
+        robot_visible=robot_visible,
+        robot_gripper_near_user_hand=robot_gripper_near_user_hand,
+        robot_placing_target_in_user_hand=robot_placing_target_in_user_hand,
+        target_food_visible=target_food_visible,
         target_food_in_user_hand=target_food_in_user_hand,
         target_food_in_robot_gripper=bool(parsed.get("target_food_in_robot_gripper")),
-        target_food_on_tray=bool(parsed.get("target_food_on_tray")),
+        target_food_on_tray=target_food_on_tray,
+        correct_target_food=correct_target_food,
+        user_grabbing_without_robot_placement=user_grabbing_without_robot_placement,
         reason=str(parsed.get("reason", "")).strip(),
         raw_text=raw_text,
     )

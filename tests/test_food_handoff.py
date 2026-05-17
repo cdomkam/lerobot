@@ -56,6 +56,11 @@ class FoodHandoffTest(unittest.TestCase):
         self.assertEqual(targets.classify_food_request("Can I have the Marshmellow?"), "marshmallow")
         self.assertIsNone(targets.classify_food_request("Either the Oreo or the Strawberry is fine"))
         self.assertIsNone(targets.classify_food_request("Bring me something"))
+        self.assertTrue(targets.is_probable_unsupported_food_request("Please bring me an apple"))
+        self.assertEqual(targets.unsupported_item_label("Please bring me an apple"), "apple")
+        self.assertFalse(
+            targets.is_probable_unsupported_food_request("Either the Oreo or the Strawberry is fine")
+        )
 
     def test_policy_config_requires_all_three_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -167,12 +172,17 @@ class FoodHandoffTest(unittest.TestCase):
                                     "text": json.dumps(
                                         {
                                             "user_hand_present": True,
+                                            "robot_visible": True,
+                                            "robot_gripper_near_user_hand": True,
+                                            "robot_placing_target_in_user_hand": True,
                                             "target_food_visible": True,
                                             "target_food_in_user_hand": True,
                                             "target_food_in_robot_gripper": False,
                                             "target_food_on_tray": False,
+                                            "correct_target_food": True,
+                                            "user_grabbing_without_robot_placement": False,
                                             "confidence": 0.91,
-                                            "reason": "target rests on the palm",
+                                            "reason": "robot gripper is placing target onto the palm",
                                         }
                                     )
                                 }
@@ -204,12 +214,69 @@ class FoodHandoffTest(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(result.confidence, 0.91)
+        self.assertTrue(result.robot_placing_target_in_user_hand)
         request = opener.call_args.args[0]
         self.assertEqual(request.full_url, "https://example.test/v1/responses")
         self.assertEqual(request.headers["Authorization"], "Bearer key")
         payload = json.loads(request.data.decode("utf-8"))
         self.assertEqual(payload["model"], "gpt-test")
         self.assertEqual(payload["input"][0]["content"][1]["type"], "input_image")
+        self.assertIn("user appears to have grabbed", payload["input"][0]["content"][0]["text"])
+
+    def test_openai_success_requires_robot_placement(self):
+        opener = Mock(
+            return_value=FakeResponse(
+                {
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "text": json.dumps(
+                                        {
+                                            "user_hand_present": True,
+                                            "robot_visible": False,
+                                            "robot_gripper_near_user_hand": False,
+                                            "robot_placing_target_in_user_hand": False,
+                                            "target_food_visible": True,
+                                            "target_food_in_user_hand": True,
+                                            "target_food_in_robot_gripper": False,
+                                            "target_food_on_tray": False,
+                                            "correct_target_food": True,
+                                            "user_grabbing_without_robot_placement": True,
+                                            "confidence": 0.95,
+                                            "reason": "food is in hand but robot is not placing it",
+                                        }
+                                    )
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        )
+        config = openai_vision.OpenAIVisionConfig(
+            api_key="key",
+            model="gpt-test",
+            api_base_url="https://example.test/v1",
+            min_confidence=0.7,
+        )
+        frame = np.full((20, 20, 3), 240, dtype=np.uint8)
+
+        with patch.object(
+            openai_vision,
+            "_frame_to_data_url",
+            return_value="data:image/jpeg;base64,abc",
+        ):
+            result = openai_vision.confirm_food_handoff_success(
+                config,
+                frame,
+                "Strawberry",
+                opener=opener,
+            )
+
+        self.assertFalse(result.success)
+        self.assertTrue(result.target_food_in_user_hand)
+        self.assertFalse(result.robot_placing_target_in_user_hand)
 
 
 if __name__ == "__main__":
