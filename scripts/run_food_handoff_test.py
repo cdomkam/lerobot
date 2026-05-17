@@ -176,9 +176,7 @@ def run_mock_policy_cycle(
                 selected_policy.target,
                 step,
             )
-            phrase = selected_policy.success_phrase or choose_success_phrase(
-                selected_policy.display_name
-            )
+            phrase = choose_success_phrase(selected_policy.display_name)
             speak(tts_worker, phrase, wait=True)
             break
         time.sleep(1.0 / max(args.fps, 1))

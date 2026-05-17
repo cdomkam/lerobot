@@ -17,15 +17,19 @@ spec.loader.exec_module(tts)
 
 (
     STRAWBERRY_OOD_PHRASES,
+    SUCCESS_PHRASES,
     ElevenLabsTTSConfig,
     ElevenLabsTTSWorker,
     choose_strawberry_ood_phrase,
+    choose_success_phrase,
     load_elevenlabs_tts_config,
 ) = (
     tts.STRAWBERRY_OOD_PHRASES,
+    tts.SUCCESS_PHRASES,
     tts.ElevenLabsTTSConfig,
     tts.ElevenLabsTTSWorker,
     tts.choose_strawberry_ood_phrase,
+    tts.choose_success_phrase,
     tts.load_elevenlabs_tts_config,
 )
 
@@ -46,6 +50,13 @@ class TTSTest(unittest.TestCase):
         self.assertEqual(len(STRAWBERRY_OOD_PHRASES), 20)
         self.assertTrue(all("Strawberry" in phrase for phrase in STRAWBERRY_OOD_PHRASES))
         self.assertIn(choose_strawberry_ood_phrase(), STRAWBERRY_OOD_PHRASES)
+
+    def test_success_phrase_inventory_has_twenty_formattable_phrases(self):
+        self.assertEqual(len(SUCCESS_PHRASES), 20)
+        self.assertTrue(all("{target}" in phrase for phrase in SUCCESS_PHRASES))
+        self.assertTrue(all("Done." not in phrase for phrase in SUCCESS_PHRASES))
+        phrase = choose_success_phrase("Oreo")
+        self.assertIn("Oreo", phrase)
 
     def test_load_config_from_env_file(self):
         with tempfile.TemporaryDirectory() as tmp:

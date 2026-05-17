@@ -408,9 +408,7 @@ def run_selected_policy(
                     success_result.score,
                     success_result.reason,
                 )
-                phrase = selected_policy.success_phrase or choose_success_phrase(
-                    selected_policy.display_name
-                )
+                phrase = choose_success_phrase(selected_policy.display_name)
                 speak(tts_worker, phrase, wait=True)
                 break
 
@@ -478,9 +476,7 @@ def run_mock_policy_flow(
                 selected_policy.target,
                 step,
             )
-            phrase = selected_policy.success_phrase or choose_success_phrase(
-                selected_policy.display_name
-            )
+            phrase = choose_success_phrase(selected_policy.display_name)
             speak(tts_worker, phrase, wait=True)
             break
         time.sleep(1.0 / max(cfg.fps, 1))

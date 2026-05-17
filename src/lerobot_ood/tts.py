@@ -50,9 +50,26 @@ FOOD_HANDOFF_OOD_PHRASES = (
 )
 
 SUCCESS_PHRASES = (
-    "Done. I have placed the {target} in your hand.",
-    "There we are. The {target} is in your hand.",
-    "Task complete. The {target} has been placed successfully.",
+    "Very good. The {target} has been delivered to your hand.",
+    "There we are. The {target} now rests safely in your hand.",
+    "I am pleased to report that the {target} is safely in hand.",
+    "Quite so. The {target} has been placed in your hand.",
+    "With pleasure, the {target} has been handed over.",
+    "Most satisfactory. The {target} is now in your care.",
+    "Pray observe, the {target} has arrived in your hand.",
+    "The matter is settled. The {target} is in your hand.",
+    "By your leave, the {target} has been deposited in your hand.",
+    "Splendid. The {target} has reached its appointed destination.",
+    "A most proper result. The {target} is now with you.",
+    "All is in order. The {target} has been presented to your hand.",
+    "Marvellous. The {target} has been conveyed as requested.",
+    "I should say that went rather nicely. The {target} is in hand.",
+    "Your request has been attended to. The {target} is now in your hand.",
+    "A fine conclusion. The {target} has been placed with due care.",
+    "If I may say so, the {target} has been delivered impeccably.",
+    "The handoff is complete. The {target} is now properly bestowed.",
+    "Capital. The {target} has been placed just as requested.",
+    "One is delighted to confirm that the {target} is now in your hand.",
 )
 
 

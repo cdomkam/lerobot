@@ -4,21 +4,18 @@
       "display_name": "Strawberry",
       "policy_repo_id": "TODO_STRAWBERRY_POLICY_REPO_ID",
       "task": "Pick up the Strawberry and put it in the user's hand.",
-      "success_phrase": "Done. I have placed the Strawberry in your hand.",
       "ood_detector_path": "models/ood_detector_strawberry.npz"
     },
     "oreo": {
       "display_name": "Oreo",
       "policy_repo_id": "TODO_OREO_POLICY_REPO_ID",
       "task": "Pick up the Oreo and put it in the user's hand.",
-      "success_phrase": "Done. I have placed the Oreo in your hand.",
       "ood_detector_path": "models/ood_detector_oreo.npz"
     },
     "marshmallow": {
       "display_name": "Marshmallow",
       "policy_repo_id": "TODO_MARSHMALLOW_POLICY_REPO_ID",
       "task": "Pick up the Marshmallow and put it in the user's hand.",
-      "success_phrase": "Done. I have placed the Marshmallow in your hand.",
       "ood_detector_path": "models/ood_detector_marshmallow.npz"
     }
   }

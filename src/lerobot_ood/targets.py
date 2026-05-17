@@ -22,7 +22,6 @@ class FoodPolicy:
     display_name: str
     policy_repo_id: str
     task: str
-    success_phrase: str = ""
     ood_detector_path: str = ""
 
 
@@ -95,7 +94,6 @@ def load_food_policy_config(path: str | Path) -> FoodPolicyConfig:
             or canonical.title(),
             policy_repo_id=policy_repo_id,
             task=task,
-            success_phrase=str(value.get("success_phrase", "")).strip(),
             ood_detector_path=str(value.get("ood_detector_path", "")).strip(),
         )
 
