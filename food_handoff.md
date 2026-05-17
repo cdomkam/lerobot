@@ -43,7 +43,8 @@ the spoken/transcribed misspelling `marshmellow`.
 ## Mocked Local Run
 
 Use `--test-mode` for the simple local path. This does not connect to SO-101 and
-does not require LeRobot, policy checkpoints, or OOD detector files:
+does not require LeRobot, policy checkpoints, or OOD detector files. Speech
+input and output are enabled by default:
 
 ```bash
 ./scripts/run_food_handoff.sh \
@@ -51,26 +52,21 @@ does not require LeRobot, policy checkpoints, or OOD detector files:
   --test-audio recordings/voice_requests/strawberry_request.wav
 ```
 
-Disable speaker output:
+Run multiple mocked cycles with the reset pause visible in logs, keeping speech
+input and output enabled:
 
 ```bash
 ./scripts/run_food_handoff.sh \
-  --test-mode --no-voice \
-  --test-audio recordings/voice_requests/oreo_request.wav
-```
-
-Bypass STT and force a target:
-
-```bash
-./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target strawberry
-```
-
-Run multiple mocked cycles with the reset pause visible in logs:
-
-```bash
-./scripts/run_food_handoff.sh \
-  --test-mode --no-voice --no-stt --target strawberry \
+  --test-mode \
+  --test-audio recordings/voice_requests/oreo_request.wav \
   --max-cycles 3 --reset-pause-s 7
+```
+
+Debug-only overrides, when you explicitly do not want audio:
+
+```bash
+./scripts/run_food_handoff.sh --test-mode --no-voice --test-audio recordings/voice_requests/oreo_request.wav
+./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target strawberry
 ```
 
 ## Robot Run
@@ -81,17 +77,16 @@ Run the same flow against SO-101 by removing `--test-mode`:
 ./scripts/run_food_handoff.sh
 ```
 
-Voice can be disabled independently with `--no-voice`. Speech-to-text can be
-disabled only when `--target strawberry|oreo|marshmallow` is supplied. Use
-`--max-cycles N` to stop after N handoffs, or leave it unset for an unlimited
-robot loop:
+Speech input and output are enabled by default. Use `--max-cycles N` to stop
+after N handoffs, or leave it unset for an unlimited robot loop:
 
 ```bash
-./scripts/run_food_handoff.sh --no-voice
-./scripts/run_food_handoff.sh --no-voice --no-stt --target strawberry
 ./scripts/run_food_handoff.sh --max-cycles 1
 ./scripts/run_food_handoff.sh --reset-pause-s 10
 ```
+
+Debug-only overrides are available as `--no-voice` and
+`--no-stt --target strawberry|oreo|marshmallow`.
 
 ## Flow
 

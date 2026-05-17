@@ -49,7 +49,7 @@ For robot execution, this branch expects a latest LeRobot checkout at
 Use `--test-mode` to run the handoff flow without connecting to SO-101, without
 loading LeRobot rollout code, and without requiring policy checkpoints or OOD
 detector files. It still exercises ElevenLabs STT, target classification, policy
-selection, success/OOD handling, and optional TTS.
+selection, success/OOD handling, and ElevenLabs TTS by default.
 
 ```bash
 ./scripts/run_food_handoff.sh \
@@ -57,27 +57,20 @@ selection, success/OOD handling, and optional TTS.
   --test-audio recordings/voice_requests/strawberry_request.wav
 ```
 
-Disable speaker output while keeping the same mocked loop:
+Run multiple mocked cycles with speech input and output still enabled:
 
 ```bash
 ./scripts/run_food_handoff.sh \
-  --test-mode --no-voice \
-  --test-audio recordings/voice_requests/oreo_request.wav
-```
-
-Bypass STT and force a target:
-
-```bash
-./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target marshmallow
-```
-
-Run multiple mocked cycles and pause 7 seconds between them so the hand can move
-out of frame:
-
-```bash
-./scripts/run_food_handoff.sh \
-  --test-mode --no-voice --no-stt --target strawberry \
+  --test-mode \
+  --test-audio recordings/voice_requests/oreo_request.wav \
   --max-cycles 3 --reset-pause-s 7
+```
+
+Debug-only overrides, when you explicitly do not want audio:
+
+```bash
+./scripts/run_food_handoff.sh --test-mode --no-voice --test-audio recordings/voice_requests/oreo_request.wav
+./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target marshmallow
 ```
 
 Expected successful mock logs include:
@@ -127,10 +120,12 @@ seconds by default so the previous hand can move out of frame. Adjust it with:
 Useful robot-mode variants:
 
 ```bash
-./scripts/run_food_handoff.sh --no-voice
-./scripts/run_food_handoff.sh --no-voice --no-stt --target strawberry
 ./scripts/run_food_handoff.sh --max-cycles 1
+./scripts/run_food_handoff.sh --reset-pause-s 10
 ```
+
+Debug-only overrides are available as `--no-voice` and `--no-stt --target ...`,
+but the normal path uses speech input and output.
 
 ## Smoke Tests
 
