@@ -19,6 +19,28 @@ The normal robot path uses local OpenCV detectors for hand entry and placement
 success. OpenAI vision is optional and is used only as a post-policy success
 confirmation; it is not in the tight robot action loop.
 
+## Production Run
+
+The default production run is a continuous, voice-driven, multi-policy robot
+loop:
+
+```bash
+./scripts/run_food_handoff.sh
+```
+
+Each cycle waits for a hand, records a voice request, classifies the requested
+food, loads that food's configured policy, runs the handoff, speaks the outcome,
+pauses for hand reset, and then returns to listening. Do not pass `--target` in
+production; `--target` is only a debug override and forces the same policy every
+cycle.
+
+Enable OpenAI success confirmation for production by setting one environment
+variable:
+
+```bash
+OPENAI_SUCCESS_ENABLED=true ./scripts/run_food_handoff.sh
+```
+
 ## Full Loop
 
 The runtime is `scripts/run_food_handoff.sh`, which launches
@@ -91,9 +113,11 @@ For robot execution, this branch expects a latest LeRobot checkout at
 ## Test Views
 
 Use these four views for normal testing. In all cases, speech input and
-ElevenLabs speech output are enabled by default.
+ElevenLabs speech output are enabled by default. Unless you pass the debug-only
+`--target` override, every cycle listens to the user's voice request and can
+select any configured food policy.
 
-### 1. Test One Item, No Robot
+### 1. Test One Voice Request, No Robot
 
 Use `--test-mode` with a recorded request clip. This does not connect to SO-101,
 does not load LeRobot rollout code, and does not require policy checkpoints or
@@ -127,21 +151,22 @@ Marshmallow:
   --max-cycles 1
 ```
 
-### 2. Test One Item, With Robot
+### 2. Test One Voice Request, With Robot
 
 Preconfiguration:
 
 - Confirm `vendor/lerobot-main` exists. If not, run
   `./scripts/update_lerobot_latest.sh`.
-- Confirm `config/food_policies.json` has the target policy repo id and
-  `ood_detector_path`.
-- Confirm the target OOD detector exists locally, for example
+- Confirm `config/food_policies.json` has policy repo ids and
+  `ood_detector_path` values for every food you may request.
+- Confirm the relevant OOD detectors exist locally, for example
   `models/ood_detector_strawberry.npz`.
 - Confirm `config/food_handoff_vision.json` uses the scene camera:
   `hand.camera_index=1` and success camera `side`.
 - Keep one hand near power/USB for the first robot run.
 
-Run one robot cycle and say "strawberry" during the request recording window:
+Run one robot cycle and say any configured food, for example "strawberry",
+during the request recording window:
 
 ```bash
 ./scripts/run_food_handoff.sh \
@@ -158,11 +183,11 @@ OPENAI_SUCCESS_ENABLED=true \
   --reset-pause-s 5
 ```
 
-### 3. Test A Set Of Items, No Robot
+### 3. Test A Set Of Voice Requests, No Robot
 
-Test mode takes one recorded request clip at a time. To test a set, run one
-command per item. This example tests Strawberry and Oreo with a five-second reset
-pause configured on each command:
+Test mode takes one recorded request clip at a time. To test a set of possible
+voice requests, run one command per recorded clip. This example verifies that
+Strawberry and Oreo each select their own configured policy:
 
 ```bash
 ./scripts/run_food_handoff.sh \
@@ -178,7 +203,8 @@ pause configured on each command:
   --reset-pause-s 5
 ```
 
-To stress repeated reset behavior for one item, increase `--max-cycles`:
+To stress repeated reset behavior for one recorded request clip, increase
+`--max-cycles`:
 
 ```bash
 ./scripts/run_food_handoff.sh \
@@ -188,10 +214,10 @@ To stress repeated reset behavior for one item, increase `--max-cycles`:
   --reset-pause-s 5
 ```
 
-### 4. Test A Set Of Items, With Robot
+### 4. Test A Set Of Voice Requests, With Robot
 
-Preconfiguration is the same as the one-item robot test, but every requested
-item must have a valid policy repo id and local OOD detector in
+Preconfiguration is the same as the single-cycle robot test: every food the user
+might request must have a valid policy repo id and local OOD detector in
 `config/food_policies.json`.
 
 Run two robot cycles and request Strawberry during the first cycle, then
@@ -212,8 +238,8 @@ OPENAI_SUCCESS_ENABLED=true \
   --reset-pause-s 5
 ```
 
-For an unattended continuous robot loop, omit `--max-cycles` and stop with
-Ctrl-C:
+The production robot loop is the same command without `--max-cycles`; stop it
+with Ctrl-C:
 
 ```bash
 ./scripts/run_food_handoff.sh
@@ -232,7 +258,8 @@ Expected successful logs include:
 ```
 
 Debug-only override: `--no-stt --target strawberry` bypasses microphone/STT and
-forces one target. The normal path uses speech input and output.
+forces one target for every cycle. The normal path uses speech input and output,
+and each cycle chooses its policy from the user's request.
 
 Useful robot-mode environment knobs:
 
