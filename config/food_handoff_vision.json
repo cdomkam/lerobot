@@ -1,8 +1,6 @@
 {
   "hand": {
-    "camera_index": 1,
-    "width": 640,
-    "height": 480,
+    "camera_name": "side",
     "fps": 30,
     "roi": [0.2, 0.18, 0.78, 0.8],
     "baseline_frames": 15,

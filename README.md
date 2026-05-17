@@ -15,9 +15,10 @@ The handoff loop is the same in mock mode and robot mode:
 8. Speak the outcome with ElevenLabs TTS.
 9. Pause so the hand can leave the frame, then repeat.
 
-The normal robot path uses local OpenCV detectors for hand entry and placement
-success. OpenAI vision is optional and is used only as a post-policy success
-confirmation; it is not in the tight robot action loop.
+The normal robot path uses a local OpenCV detector for hand entry. When OpenAI
+success confirmation is enabled, side-camera success checks run during the
+policy loop so a correct delivery can be accepted even if the local color/ROI
+success detector misses it.
 
 ## Production Run
 
@@ -46,13 +47,15 @@ OPENAI_SUCCESS_ENABLED=false ./scripts/run_food_handoff.sh
 The runtime is `scripts/run_food_handoff.sh`, which launches
 `scripts/run_food_handoff.py`.
 
-- **Hand gate:** `config/food_handoff_vision.json` opens OpenCV camera index `1`
-  and watches the configured `hand.roi`. It builds a short empty-scene baseline,
-  then triggers when enough pixels in that ROI change for enough consecutive
-  frames.
+- **Hand gate:** `config/food_handoff_vision.json` watches named camera `side`
+  from the LeRobot observation and uses the configured `hand.roi`. It builds a
+  short empty-scene baseline, then triggers when enough pixels in that ROI
+  change for enough consecutive frames.
 - **Speech request:** the runner records a short microphone clip, sends it to
   ElevenLabs STT, and classifies the transcript as `strawberry`, `oreo`, or
-  `marshmallow`. Debug runs can bypass this with `--no-stt --target strawberry`.
+  `marshmallow`. After classification, ElevenLabs TTS speaks a randomized
+  British-style fetching phrase for the requested food. Debug runs can bypass
+  speech input with `--no-stt --target strawberry`.
 - **Policy selection:** `config/food_policies.json` maps the classified food to
   a Hugging Face policy repo, task prompt, and per-target OOD detector.
 - **Policy execution:** the selected LeRobot policy runs on SO-101 for
@@ -60,16 +63,15 @@ The runtime is `scripts/run_food_handoff.sh`, which launches
 - **OOD scoring:** the ACT backbone encoder scores the configured `OOD_CAMERA`
   against the target detector `.npz`. OOD events are logged and can trigger
   ElevenLabs voice alerts, but they do not stop the policy.
-- **Success detection:** the local ROI/color detector watches named camera
-  `side`, which maps to `CAMERA_SIDE_INDEX=1`. This is the scene camera in the
-  current setup.
-- **OpenAI confirmation:** by default, an OpenCV success candidate is sent to
-  `gpt-5.4-nano` using the side-camera frame. The loop only accepts success if
-  the model says the target food is in the user's hand with at least
-  `OPENAI_SUCCESS_MIN_CONFIDENCE` from `.env` (default `0.70`). If the API
-  request fails, the runner logs a warning and falls back to the OpenCV success
-  result. Set `OPENAI_SUCCESS_ENABLED=false` for a debug run without OpenAI
-  confirmation.
+- **Success detection:** the side camera, named `side`, maps to
+  `CAMERA_SIDE_INDEX=1` and is the scene camera in the current setup. When
+  OpenAI success is enabled, the loop sends that frame to `gpt-5.4-nano` every
+  `OPENAI_SUCCESS_EVERY_N` frames and immediately on any local ROI/color success
+  candidate. Success is accepted when the model says the target food is in the
+  user's hand with at least `OPENAI_SUCCESS_MIN_CONFIDENCE` from `.env` (default
+  `0.70`). If OpenAI is disabled, the local ROI/color detector is the fallback
+  success signal. If OpenAI fails on a local candidate, the runner logs a
+  warning and accepts the local result.
 - **Reset/repeat:** robot mode loops until interrupted by default. Test mode
   runs one cycle by default. Use `--max-cycles N` to bound either mode, or
   `--max-cycles 0` for an unlimited loop.
@@ -162,8 +164,8 @@ Preconfiguration:
   `ood_detector_path` values for every food you may request.
 - Confirm the relevant OOD detectors exist locally, for example
   `models/ood_detector_strawberry.npz`.
-- Confirm `config/food_handoff_vision.json` uses the scene camera:
-  `hand.camera_index=1` and success camera `side`.
+- Confirm `config/food_handoff_vision.json` uses the scene camera for both
+  gates: `hand.camera_name=side` and `success.camera_name=side`.
 - Keep one hand near power/USB for the first robot run.
 
 Run one robot cycle and say any configured food, for example "strawberry",
@@ -253,8 +255,11 @@ Expected successful logs include:
 [HAND] present
 [REQUEST] transcript='Please put the strawberry in my hand' target=strawberry
 [REQUEST] target=strawberry policy=...
+[TTS] queue wait=True phrase='...Strawberry...'
 [POLICY] starting target=strawberry ...
-[TASK_SUCCESS] target=strawberry frame=... confidence=...
+[OPENAI_SUCCESS] frame=... success=True ...
+[TASK_SUCCESS] target=strawberry frame=... source=openai opencv_score=...
+[TTS] queue wait=True phrase='...Strawberry...'
 [CYCLE] complete cycle=1 outcome=success
 ```
 

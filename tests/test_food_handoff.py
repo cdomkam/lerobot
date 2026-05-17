@@ -127,6 +127,29 @@ class FoodHandoffTest(unittest.TestCase):
         self.assertFalse(detector.update(changed).detected)
         self.assertTrue(detector.update(changed).detected)
 
+    def test_vision_config_uses_named_observation_cameras(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "vision.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "hand": {
+                            "camera_name": "side",
+                            "roi": [0, 0, 1, 1],
+                        },
+                        "success": {
+                            "camera_name": "side",
+                            "targets": {},
+                        },
+                    }
+                )
+            )
+
+            config = vision.load_vision_config(path)
+
+        self.assertEqual(config.hand.camera_name, "side")
+        self.assertEqual(config.success.camera_name, "side")
+
     def test_success_detector_debounces_target_color(self):
         config = vision.SuccessVisionConfig(
             roi=(0, 0, 1, 1),

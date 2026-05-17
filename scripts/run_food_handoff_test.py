@@ -9,6 +9,7 @@ import time
 
 from lerobot_ood import (
     ElevenLabsTTSWorker,
+    choose_fetching_phrase,
     choose_food_handoff_ood_phrase,
     choose_success_phrase,
     classify_food_request,
@@ -111,6 +112,7 @@ def main() -> None:
                 selected_policy.policy_repo_id,
                 selected_policy.task,
             )
+            speak(tts_worker, choose_fetching_phrase(selected_policy.display_name), wait=True)
             outcome = run_mock_policy_cycle(args, selected_policy, tts_worker)
             logger.info("[CYCLE] complete cycle=%d outcome=%s", cycle, outcome)
             reset_between_cycles(args, cycle)
@@ -125,12 +127,16 @@ def parse_bool(value: str) -> bool:
 
 def speak(worker: ElevenLabsTTSWorker | None, phrase: str, wait: bool = False) -> None:
     if worker is None:
+        logger.info("[TTS] disabled; skipping phrase=%r", phrase)
         return
+    logger.info("[TTS] queue wait=%s phrase=%r", wait, phrase)
     if not worker.speak(phrase):
         logger.warning("TTS queue full; dropping voice phrase")
         return
     if wait and not worker.wait_until_idle(timeout=30.0):
         logger.warning("Timed out waiting for TTS phrase to finish")
+    elif wait and worker.last_error is not None:
+        logger.warning("TTS phrase finished with error: %s", worker.last_error)
 
 
 def close_tts(worker: ElevenLabsTTSWorker | None) -> None:

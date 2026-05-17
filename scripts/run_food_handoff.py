@@ -30,6 +30,7 @@ from lerobot_ood import (
     TargetSuccessDetector,
     canonicalize_target,
     choose_food_handoff_ood_phrase,
+    choose_fetching_phrase,
     choose_success_phrase,
     classify_food_request,
     extract_camera_frame,
@@ -128,6 +129,9 @@ def main(cfg: FoodHandoffConfig) -> None:
     target_override = canonicalize_target(cfg.target)
     if cfg.target and target_override is None:
         raise ValueError("--target must be one of: strawberry, oreo, marshmallow")
+    bootstrap_policy_repo_id = policy_repo_id_from_config(cfg.policy)
+    if not cfg.test_mode and not bootstrap_policy_repo_id:
+        raise ValueError("A bootstrap policy is required for robot camera observations.")
 
     base_ood_detector_path = cfg.ood_detector_path
     cycle = 0
@@ -142,11 +146,22 @@ def main(cfg: FoodHandoffConfig) -> None:
             logger.info("[CYCLE] start cycle=%d", cycle)
             selected_target = target_override
 
-            logger.info("Waiting for hand in camera frame...")
+            logger.info("Waiting for hand in camera %r...", vision_config.hand.camera_name)
             if cfg.test_mode:
                 logger.info("[HAND] mocked present")
             else:
-                wait_for_hand(vision_config.hand, timeout_s=cfg.hand_wait_timeout_s)
+                shutdown_event = ProcessSignalHandler(use_threads=True, display_pid=False).shutdown_event
+                set_policy_config(cfg, bootstrap_policy_repo_id)
+                logger.info("Building rollout context for hand detection...")
+                hand_ctx = build_rollout_context(cfg, shutdown_event)
+                try:
+                    wait_for_hand(
+                        hand_ctx.hardware.robot_wrapper,
+                        vision_config.hand,
+                        timeout_s=cfg.hand_wait_timeout_s,
+                    )
+                finally:
+                    disconnect_rollout_context(hand_ctx)
             logger.info("[HAND] present")
 
             if selected_target is None:
@@ -167,6 +182,7 @@ def main(cfg: FoodHandoffConfig) -> None:
                 selected_policy.policy_repo_id,
                 selected_policy.task,
             )
+            speak(tts_worker, choose_fetching_phrase(selected_policy.display_name), wait=True)
 
             if cfg.test_mode:
                 outcome = run_mock_policy_flow(cfg, selected_policy, tts_worker)
@@ -174,9 +190,6 @@ def main(cfg: FoodHandoffConfig) -> None:
                 reset_between_cycles(cfg, cycle)
                 continue
 
-            cfg.policy = PreTrainedConfig.from_pretrained(selected_policy.policy_repo_id)
-            cfg.policy.pretrained_path = selected_policy.policy_repo_id
-            cfg.policy.device = cfg.device
             setattr(cfg, "task", selected_policy.task)
             ood_detector_path = base_ood_detector_path
             if selected_policy.ood_detector_path:
@@ -200,6 +213,7 @@ def main(cfg: FoodHandoffConfig) -> None:
             )
 
             logger.info("Building rollout context for selected policy...")
+            set_policy_config(cfg, selected_policy.policy_repo_id)
             ctx = build_rollout_context(cfg, shutdown_event)
             if cfg.ood_encoder == "act_backbone":
                 encoder = ACTBackboneEncoder(policy=ctx.policy.policy, device=cfg.device)
@@ -272,6 +286,20 @@ def listen_and_classify_request(cfg: FoodHandoffConfig, stt_config) -> str | Non
             pass
 
 
+def policy_repo_id_from_config(policy_config) -> str:
+    for attr in ("pretrained_path", "path", "repo_id"):
+        value = getattr(policy_config, attr, None)
+        if value:
+            return str(value)
+    return ""
+
+
+def set_policy_config(cfg: FoodHandoffConfig, policy_repo_id: str) -> None:
+    cfg.policy = PreTrainedConfig.from_pretrained(policy_repo_id)
+    cfg.policy.pretrained_path = policy_repo_id
+    cfg.policy.device = cfg.device
+
+
 def resolve_config_path(value: str, config_path: str) -> str:
     path = Path(value)
     if path.is_absolute():
@@ -293,38 +321,32 @@ def reset_between_cycles(cfg: FoodHandoffConfig, cycle: int) -> None:
     time.sleep(cfg.reset_pause_s)
 
 
-def wait_for_hand(hand_config, timeout_s: float = 0.0) -> None:
-    try:
-        import cv2
-    except ImportError as exc:
-        raise RuntimeError(
-            "Hand-triggered recording requires opencv-python in the runtime environment."
-        ) from exc
-
-    cap = cv2.VideoCapture(hand_config.camera_index)
-    if not cap.isOpened():
-        raise RuntimeError(f"could not open hand camera index {hand_config.camera_index}")
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, hand_config.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, hand_config.height)
-    cap.set(cv2.CAP_PROP_FPS, hand_config.fps)
-
+def wait_for_hand(robot, hand_config, timeout_s: float = 0.0) -> None:
     detector = HandPresenceDetector(hand_config)
     start = time.perf_counter()
+    while True:
+        obs_raw = robot.get_observation()
+        frame_rgb = extract_camera_frame(obs_raw, hand_config.camera_name)
+        result = detector.update(frame_rgb)
+        if result.detected:
+            logger.info("[HAND] score=%.3f %s", result.score, result.reason)
+            return
+        if timeout_s > 0 and (time.perf_counter() - start) >= timeout_s:
+            raise TimeoutError(f"hand did not enter frame within {timeout_s:.1f}s")
+        precise_sleep(1.0 / max(hand_config.fps, 1))
+
+
+def disconnect_rollout_context(ctx) -> None:
     try:
-        while True:
-            ok, frame_bgr = cap.read()
-            if not ok:
-                raise RuntimeError(f"failed to read camera index {hand_config.camera_index}")
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            result = detector.update(frame_rgb)
-            if result.detected:
-                logger.info("[HAND] score=%.3f %s", result.score, result.reason)
-                return
-            if timeout_s > 0 and (time.perf_counter() - start) >= timeout_s:
-                raise TimeoutError(f"hand did not enter frame within {timeout_s:.1f}s")
-            time.sleep(1.0 / max(hand_config.fps, 1))
-    finally:
-        cap.release()
+        inner_robot = ctx.hardware.robot_wrapper.inner
+        if inner_robot.is_connected:
+            inner_robot.disconnect()
+    except AttributeError:
+        logger.warning("Could not disconnect robot from rollout context", exc_info=True)
+
+    teleop = getattr(ctx.hardware, "teleop", None)
+    if teleop is not None and teleop.is_connected:
+        teleop.disconnect()
 
 
 def run_selected_policy(
@@ -350,7 +372,7 @@ def run_selected_policy(
     sum_score = 0.0
     success = False
     success_frame = 0
-    last_openai_success_check_frame = -cfg.openai_success_every_n
+    last_openai_success_check_frame = 0
     outcome = "timeout"
 
     engine.reset()
@@ -417,60 +439,75 @@ def run_selected_policy(
             else:
                 success_frame_raw = extract_camera_frame(obs_raw, vision_config.success.camera_name)
             success_result = success_detector.update(success_frame_raw, selected_policy.target)
-            if success_result.detected:
-                success_confirmed = True
-                if openai_success_config is not None:
-                    if n_seen - last_openai_success_check_frame < cfg.openai_success_every_n:
-                        success_confirmed = False
-                    else:
-                        last_openai_success_check_frame = n_seen
-                        try:
-                            openai_result = confirm_food_handoff_success(
-                                openai_success_config,
-                                success_frame_raw,
-                                selected_policy.display_name,
-                            )
-                        except Exception as exc:
+            local_success_candidate = success_result.detected
+            success_confirmed = False
+            success_source = ""
+            if openai_success_config is not None:
+                openai_due = n_seen - last_openai_success_check_frame >= cfg.openai_success_every_n
+                if local_success_candidate or openai_due:
+                    last_openai_success_check_frame = n_seen
+                    try:
+                        openai_result = confirm_food_handoff_success(
+                            openai_success_config,
+                            success_frame_raw,
+                            selected_policy.display_name,
+                        )
+                    except Exception as exc:
+                        if local_success_candidate:
                             logger.warning(
                                 "[OPENAI_SUCCESS] confirmation failed; accepting OpenCV success: %s",
                                 exc,
                             )
+                            success_confirmed = True
+                            success_source = "opencv_openai_error"
                         else:
+                            logger.warning("[OPENAI_SUCCESS] periodic check failed: %s", exc)
+                    else:
+                        logger.info(
+                            "[OPENAI_SUCCESS] frame=%d success=%s confidence=%.3f hand=%s "
+                            "visible=%s in_gripper=%s on_tray=%s opencv_candidate=%s "
+                            "opencv_score=%.3f reason=%r",
+                            n_seen,
+                            openai_result.success,
+                            openai_result.confidence,
+                            openai_result.user_hand_present,
+                            openai_result.target_food_visible,
+                            openai_result.target_food_in_robot_gripper,
+                            openai_result.target_food_on_tray,
+                            local_success_candidate,
+                            success_result.score,
+                            openai_result.reason,
+                        )
+                        success_confirmed = openai_result.success
+                        success_source = "openai" if success_confirmed else ""
+                        if local_success_candidate and not success_confirmed:
                             logger.info(
-                                "[OPENAI_SUCCESS] success=%s confidence=%.3f hand=%s visible=%s "
-                                "in_gripper=%s on_tray=%s reason=%r",
-                                openai_result.success,
+                                "[TASK_SUCCESS_CANDIDATE_REJECTED] target=%s frame=%d "
+                                "opencv_score=%.3f openai_confidence=%.3f",
+                                selected_policy.target,
+                                n_seen,
+                                success_result.score,
                                 openai_result.confidence,
-                                openai_result.user_hand_present,
-                                openai_result.target_food_visible,
-                                openai_result.target_food_in_robot_gripper,
-                                openai_result.target_food_on_tray,
-                                openai_result.reason,
                             )
-                            success_confirmed = openai_result.success
-                            if not success_confirmed:
-                                logger.info(
-                                    "[TASK_SUCCESS_CANDIDATE_REJECTED] target=%s frame=%d "
-                                    "opencv_score=%.3f openai_confidence=%.3f",
-                                    selected_policy.target,
-                                    n_seen,
-                                    success_result.score,
-                                    openai_result.confidence,
-                                )
-                if success_confirmed:
-                    success = True
-                    success_frame = n_seen
-                    outcome = "success"
-                    logger.info(
-                        "[TASK_SUCCESS] target=%s frame=%d confidence=%.3f %s",
-                        selected_policy.target,
-                        success_frame,
-                        success_result.score,
-                        success_result.reason,
-                    )
-                    phrase = choose_success_phrase(selected_policy.display_name)
-                    speak(tts_worker, phrase, wait=True)
-                    break
+            elif local_success_candidate:
+                success_confirmed = True
+                success_source = "opencv"
+
+            if success_confirmed:
+                success = True
+                success_frame = n_seen
+                outcome = "success"
+                logger.info(
+                    "[TASK_SUCCESS] target=%s frame=%d source=%s opencv_score=%.3f %s",
+                    selected_policy.target,
+                    success_frame,
+                    success_source,
+                    success_result.score,
+                    success_result.reason,
+                )
+                phrase = choose_success_phrase(selected_policy.display_name)
+                speak(tts_worker, phrase, wait=True)
+                break
 
             dt = time.perf_counter() - loop_start
             sleep_t = control_interval - dt
@@ -555,12 +592,16 @@ def run_mock_policy_flow(
 
 def speak(worker: ElevenLabsTTSWorker | None, phrase: str, wait: bool = False) -> None:
     if worker is None:
+        logger.info("[TTS] disabled; skipping phrase=%r", phrase)
         return
+    logger.info("[TTS] queue wait=%s phrase=%r", wait, phrase)
     if not worker.speak(phrase):
         logger.warning("TTS queue full; dropping voice phrase")
         return
     if wait and not worker.wait_until_idle(timeout=30.0):
         logger.warning("Timed out waiting for TTS phrase to finish")
+    elif wait and worker.last_error is not None:
+        logger.warning("TTS phrase finished with error: %s", worker.last_error)
 
 
 if __name__ == "__main__":

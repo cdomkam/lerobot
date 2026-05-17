@@ -19,9 +19,7 @@ class DetectionResult:
 
 @dataclass(frozen=True)
 class HandVisionConfig:
-    camera_index: int = 0
-    width: int = 640
-    height: int = 480
+    camera_name: str = "side"
     fps: int = 30
     roi: tuple[float, float, float, float] = (0.35, 0.20, 0.60, 0.75)
     baseline_frames: int = 15
@@ -130,9 +128,7 @@ def load_vision_config(path: str | Path) -> FoodHandoffVisionConfig:
     success_raw = raw.get("success", {})
     target_raw = success_raw.get("targets", {})
     hand = HandVisionConfig(
-        camera_index=int(hand_raw.get("camera_index", 0)),
-        width=int(hand_raw.get("width", 640)),
-        height=int(hand_raw.get("height", 480)),
+        camera_name=str(hand_raw.get("camera_name", "side")).strip() or "side",
         fps=int(hand_raw.get("fps", 30)),
         roi=_tuple4(hand_raw.get("roi", (0.35, 0.20, 0.60, 0.75))),
         baseline_frames=int(hand_raw.get("baseline_frames", 15)),

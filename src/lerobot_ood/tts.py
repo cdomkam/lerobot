@@ -72,6 +72,29 @@ SUCCESS_PHRASES = (
     "One is delighted to confirm that the {target} is now in your hand.",
 )
 
+FETCHING_PHRASES = (
+    "Right you are. I shall fetch the {target} directly.",
+    "Very good. The {target} is now my appointed errand.",
+    "Splendid. I am off to procure the {target}.",
+    "Quite so. I shall see to the {target} at once.",
+    "Capital. The {target} shall be brought forthwith.",
+    "With pleasure. I am fetching the {target} now.",
+    "Jolly good. I shall attend to the {target}.",
+    "Consider it arranged. The {target} is on its way.",
+    "By all means. I shall retrieve the {target}.",
+    "Excellent. I am setting about the {target} presently.",
+    "As you wish. I shall collect the {target} with care.",
+    "Most certainly. The {target} shall be fetched.",
+    "Very well. I am making for the {target}.",
+    "A fine choice. I shall bring the {target}.",
+    "I say, the {target} it is. I shall fetch it now.",
+    "Of course. I shall bring the {target} along directly.",
+    "Marvellous. I am on the matter of the {target}.",
+    "Naturally. I shall secure the {target} for you.",
+    "Understood. I am off in pursuit of the {target}.",
+    "Rather good. I shall present the {target} shortly.",
+)
+
 
 @dataclass(frozen=True)
 class ElevenLabsTTSConfig:
@@ -100,6 +123,12 @@ def choose_success_phrase(target: str, rng: random.Random | None = None) -> str:
     """Return a success phrase for a completed handoff."""
     rng = rng or random
     return rng.choice(SUCCESS_PHRASES).format(target=target)
+
+
+def choose_fetching_phrase(target: str, rng: random.Random | None = None) -> str:
+    """Return a phrase confirming that the requested food will be fetched."""
+    rng = rng or random
+    return rng.choice(FETCHING_PHRASES).format(target=target)
 
 
 def load_env_file(path: str | Path) -> dict[str, str]:
