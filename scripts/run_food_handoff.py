@@ -324,7 +324,11 @@ def run_selected_policy(
                 robot.send_action(processed_action)
                 n_actions += 1
 
-            success_result = success_detector.update(frame, selected_policy.target)
+            if vision_config.success.camera_name == cfg.ood_camera:
+                success_frame_raw = frame
+            else:
+                success_frame_raw = extract_camera_frame(obs_raw, vision_config.success.camera_name)
+            success_result = success_detector.update(success_frame_raw, selected_policy.target)
             if success_result.detected:
                 success = True
                 success_frame = n_seen

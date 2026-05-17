@@ -16,7 +16,9 @@ cp config/food_handoff_vision.example.json config/food_handoff_vision.json
 Then edit:
 
 - `config/food_policies.json` with the three Hugging Face policy repo ids.
-- `config/food_handoff_vision.json` with camera ROI and color thresholds.
+- `config/food_handoff_vision.json` with camera ROI and color thresholds. The
+  example uses the front camera for hand entry and the side camera for placement
+  success, because the side view shows the food-in-hand state more clearly.
 - `.env` with `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`,
   `ELEVENLABS_MODEL_ID`, and optionally `ELEVENLABS_STT_MODEL_ID=scribe_v2`.
 
@@ -77,6 +79,16 @@ STT, using a previously recorded request clip:
 
 ```bash
 python3 eleven_labs_stt_test.py request.wav
+```
+
+Extract and replay non-robot fixtures from a Hugging Face LeRobot dataset:
+
+```bash
+uv run python scripts/extract_handoff_fixtures.py \
+  --download \
+  --repo-id ofcourseistillloveyou/so101_recording_strawberry_num40_20260516_161110
+
+uv run python scripts/replay_handoff_mock.py
 ```
 
 ## Mocking Without The Robot

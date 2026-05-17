@@ -39,8 +39,11 @@ class TargetColorConfig:
 
 @dataclass(frozen=True)
 class SuccessVisionConfig:
+    camera_name: str = "side"
     roi: tuple[float, float, float, float] = (0.35, 0.20, 0.60, 0.75)
     min_blob_fraction: float = 0.012
+    min_context_bright_fraction: float = 0.0
+    context_bright_threshold: int = 210
     debounce_frames: int = 15
     targets: dict[str, TargetColorConfig] = field(default_factory=dict)
 
@@ -96,13 +99,22 @@ class TargetSuccessDetector:
         hi = np.asarray(color.rgb_max, dtype=np.uint8)
         mask = np.all((crop >= lo) & (crop <= hi), axis=2)
         fraction = float(mask.mean())
-        raw_detected = fraction >= self.config.min_blob_fraction
+        bright_fraction = float(
+            np.all(crop >= self.config.context_bright_threshold, axis=2).mean()
+        )
+        raw_detected = (
+            fraction >= self.config.min_blob_fraction
+            and bright_fraction >= self.config.min_context_bright_fraction
+        )
         self._streaks[target] = self._streaks.get(target, 0) + 1 if raw_detected else 0
         detected = self._streaks[target] >= self.config.debounce_frames
         return DetectionResult(
             detected=detected,
             score=fraction,
-            reason=f"target_blob_fraction={fraction:.3f}",
+            reason=(
+                f"target_blob_fraction={fraction:.3f}, "
+                f"context_bright_fraction={bright_fraction:.3f}"
+            ),
         )
 
 
@@ -138,8 +150,11 @@ def load_vision_config(path: str | Path) -> FoodHandoffVisionConfig:
         for target, values in target_raw.items()
     }
     success = SuccessVisionConfig(
+        camera_name=str(success_raw.get("camera_name", "side")).strip() or "side",
         roi=_tuple4(success_raw.get("roi", hand.roi)),
         min_blob_fraction=float(success_raw.get("min_blob_fraction", 0.012)),
+        min_context_bright_fraction=float(success_raw.get("min_context_bright_fraction", 0.0)),
+        context_bright_threshold=int(success_raw.get("context_bright_threshold", 210)),
         debounce_frames=int(success_raw.get("debounce_frames", 15)),
         targets=targets,
     )

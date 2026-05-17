@@ -38,6 +38,7 @@ from .vision import (
     HandPresenceDetector,
     HandVisionConfig,
     SuccessVisionConfig,
+    TargetColorConfig,
     TargetSuccessDetector,
     load_vision_config,
 )
@@ -70,6 +71,7 @@ __all__ = [
     "HandPresenceDetector",
     "HandVisionConfig",
     "SuccessVisionConfig",
+    "TargetColorConfig",
     "TargetSuccessDetector",
     "load_vision_config",
 ]
