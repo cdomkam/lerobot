@@ -13,12 +13,34 @@ from .act_encoder import ACTBackboneEncoder
 from .detector import OODDetector, OODResult
 from .encoder import DinoV2Encoder
 from .obs import extract_camera_frame
+from .stt import ElevenLabsSTTConfig, load_elevenlabs_stt_config, transcribe_audio_file
+from .targets import (
+    TARGETS,
+    FoodPolicy,
+    FoodPolicyConfig,
+    canonicalize_target,
+    classify_food_request,
+    load_food_policy_config,
+)
 from .tts import (
+    FOOD_HANDOFF_OOD_PHRASES,
+    SUCCESS_PHRASES,
     STRAWBERRY_OOD_PHRASES,
     ElevenLabsTTSConfig,
     ElevenLabsTTSWorker,
+    choose_food_handoff_ood_phrase,
     choose_strawberry_ood_phrase,
+    choose_success_phrase,
     load_elevenlabs_tts_config,
+)
+from .vision import (
+    FoodHandoffVisionConfig,
+    HandPresenceDetector,
+    HandVisionConfig,
+    SuccessVisionConfig,
+    TargetColorConfig,
+    TargetSuccessDetector,
+    load_vision_config,
 )
 
 __all__ = [
@@ -27,9 +49,29 @@ __all__ = [
     "ACTBackboneEncoder",
     "DinoV2Encoder",
     "extract_camera_frame",
+    "TARGETS",
+    "FoodPolicy",
+    "FoodPolicyConfig",
+    "canonicalize_target",
+    "classify_food_request",
+    "load_food_policy_config",
     "STRAWBERRY_OOD_PHRASES",
+    "FOOD_HANDOFF_OOD_PHRASES",
+    "SUCCESS_PHRASES",
     "ElevenLabsTTSConfig",
     "ElevenLabsTTSWorker",
+    "ElevenLabsSTTConfig",
+    "choose_food_handoff_ood_phrase",
     "choose_strawberry_ood_phrase",
+    "choose_success_phrase",
     "load_elevenlabs_tts_config",
+    "load_elevenlabs_stt_config",
+    "transcribe_audio_file",
+    "FoodHandoffVisionConfig",
+    "HandPresenceDetector",
+    "HandVisionConfig",
+    "SuccessVisionConfig",
+    "TargetColorConfig",
+    "TargetSuccessDetector",
+    "load_vision_config",
 ]
