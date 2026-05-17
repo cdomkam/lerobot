@@ -6,13 +6,15 @@ ROBOT_ID="${ROBOT_ID:-so101_follower}"
 POLICY_REPO_ID="${POLICY_REPO_ID:-ofcourseistillloveyou/act-so101-feed-me-vai-10ep-run1}"
 POLICY_TYPE="${POLICY_TYPE:-act}"
 POLICY_DEVICE="${POLICY_DEVICE:-mps}"
+POLICY_CHUNK_SIZE="${POLICY_CHUNK_SIZE:-50}"
+POLICY_N_ACTION_STEPS="${POLICY_N_ACTION_STEPS:-50}"
 UV_PYTHON="${UV_PYTHON:-3.12}"
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 DATASET_REPO_ID="${DATASET_REPO_ID:-cdomkam/eval_so101_policy_rollout_${RUN_ID}}"
 TASK="${TASK:-Pick up the tape and put it on the pink post-it.}"
 NUM_EPISODES="${NUM_EPISODES:-1}"
-EPISODE_TIME_S="${EPISODE_TIME_S:-15}"
+EPISODE_TIME_S="${EPISODE_TIME_S:-45}"
 RESET_TIME_S="${RESET_TIME_S:-10}"
 FPS="${FPS:-30}"
 PUSH_TO_HUB="${PUSH_TO_HUB:-false}"
@@ -27,6 +29,8 @@ CAMERAS="{ front: {type: opencv, index_or_path: ${CAMERA_FRONT_INDEX}, width: ${
 
 echo "Policy repo:     ${POLICY_REPO_ID}"
 echo "Policy device:   ${POLICY_DEVICE}"
+echo "Policy chunk:    ${POLICY_CHUNK_SIZE}"
+echo "Action steps:    ${POLICY_N_ACTION_STEPS}"
 echo "Rollout dataset: ${DATASET_REPO_ID}"
 echo "Robot port:      ${ROBOT_PORT}"
 echo "Python:          ${UV_PYTHON}"
@@ -41,6 +45,8 @@ exec uvx --python "${UV_PYTHON}" --from 'lerobot[feetech]' lerobot-record \
   --policy.type="${POLICY_TYPE}" \
   --policy.pretrained_path="${POLICY_REPO_ID}" \
   --policy.device="${POLICY_DEVICE}" \
+  --policy.chunk_size="${POLICY_CHUNK_SIZE}" \
+  --policy.n_action_steps="${POLICY_N_ACTION_STEPS}" \
   --dataset.repo_id="${DATASET_REPO_ID}" \
   --dataset.single_task="${TASK}" \
   --dataset.fps="${FPS}" \

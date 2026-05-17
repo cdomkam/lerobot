@@ -1,0 +1,44 @@
+TASK="Pick up the pretzel and put it on the pink post-it." NUM_EPISODES=10 ./scripts/record_data.sh
+DATASET_REPO_ID="ofcourseistillloveyou/so101_recording_20260516_105727" \
+TASK="Pick up the cheetoh and put it on the napkin." \
+NUM_EPISODES=60 \
+RESUME=true \
+PUSH_TO_HUB=true \
+./scripts/record_data.sh
+
+DATASET_REPO_ID="cdomkam/so101_recording_strawberry_20260516_161110" \
+TASK="Pick up the strawberry and put it in the hand" \
+NUM_EPISODES=20 \
+RESUME=true \
+PUSH_TO_HUB=false \
+./scripts/record_data.sh
+
+
+DATASET_REPO_ID="cdomkam/so101_recording_oreo" \
+TASK="Pick up the oreo and put it in the hand" \
+NUM_EPISODES=20 \
+RESUME=true \
+PUSH_TO_HUB=true \
+./scripts/record_data.sh
+
+uvx --from huggingface_hub hf auth login
+SOURCE_DATASET_ID=cdomkam/so101_recording_20260515_212609 ./scripts/upload_dataset_to_hf.sh
+STEPS=3000 BATCH_SIZE=16 POLICY_REPO_ID=ofcourseistillloveyou/so-101-feed-me-act-v2 ./scripts/train_on_modal.sh
+JOB_NAME=so101-feed-me-act RESUME=true STEPS=3000 BATCH_SIZE=16 POLICY_REPO_ID=ofcourseistillloveyou/so-101-feed-me-act-v2 ./scripts/train_on_modal.sh
+
+TOKEN="<api token>" \
+FPS=50 \
+CAMERA_FPS=30 \
+DURATION=45 \
+./scripts/run_policy_api_server.sh
+
+
+
+uv run python scripts/fit_ood_detector.py \
+  --dataset_repo_id ofcourseistillloveyou/so101_recording_20260516_105727 \
+  --policy_path    ofcourseistillloveyou/act-so101-recording-20260516 \
+  --camera_name    front \
+  --output_path    models/ood_detector.npz
+
+
+  OD_TTS_EVERY_N=1 DURATION=3 ./scripts/run_policy_with_ood.sh
