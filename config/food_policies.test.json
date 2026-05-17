@@ -1,0 +1,22 @@
+{
+  "targets": {
+    "strawberry": {
+      "display_name": "Strawberry",
+      "policy_repo_id": "mock/strawberry-policy",
+      "task": "Pick up the Strawberry and put it in the user's hand.",
+      "success_phrase": "Done. I have placed the Strawberry in your hand."
+    },
+    "oreo": {
+      "display_name": "Oreo",
+      "policy_repo_id": "mock/oreo-policy",
+      "task": "Pick up the Oreo and put it in the user's hand.",
+      "success_phrase": "Done. I have placed the Oreo in your hand."
+    },
+    "marshmallow": {
+      "display_name": "Marshmallow",
+      "policy_repo_id": "mock/marshmallow-policy",
+      "task": "Pick up the Marshmallow and put it in the user's hand.",
+      "success_phrase": "Done. I have placed the Marshmallow in your hand."
+    }
+  }
+}

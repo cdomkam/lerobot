@@ -11,6 +11,7 @@ fi
 usage() {
   cat >&2 <<'USAGE'
 Usage: ./scripts/run_food_handoff.sh [--no-voice] [--no-stt --target strawberry|oreo|marshmallow]
+       ./scripts/run_food_handoff.sh --test-mode --test-audio recordings/voice_requests/strawberry_request.wav --no-voice
 
 Waits for a hand in frame, records a short voice request, classifies the food
 target, runs the matching SO-101 policy, detects successful placement, and
@@ -20,6 +21,8 @@ USAGE
 
 NO_VOICE=false
 NO_STT=false
+TEST_MODE=false
+TEST_AUDIO_PATH="${TEST_AUDIO_PATH:-}"
 TARGET="${TARGET:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -33,6 +36,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --target)
       TARGET="${2:-}"
+      shift 2
+      ;;
+    --test-mode)
+      TEST_MODE=true
+      shift
+      ;;
+    --test-audio)
+      TEST_AUDIO_PATH="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -67,6 +78,17 @@ REQUEST_AUDIO_SECONDS="${REQUEST_AUDIO_SECONDS:-3}"
 REQUEST_AUDIO_SAMPLE_RATE="${REQUEST_AUDIO_SAMPLE_RATE:-16000}"
 REQUEST_RECORDER_COMMAND="${REQUEST_RECORDER_COMMAND:-}"
 HAND_WAIT_TIMEOUT_S="${HAND_WAIT_TIMEOUT_S:-0}"
+TEST_POLICY_STEPS="${TEST_POLICY_STEPS:-5}"
+TEST_SUCCESS_AFTER_STEPS="${TEST_SUCCESS_AFTER_STEPS:-3}"
+
+if [[ "${TEST_MODE}" == "true" ]]; then
+  if [[ "${FOOD_POLICY_CONFIG}" == "config/food_policies.json" ]]; then
+    FOOD_POLICY_CONFIG="config/food_policies.test.json"
+  fi
+  if [[ "${VISION_CONFIG}" == "config/food_handoff_vision.json" ]]; then
+    VISION_CONFIG="config/food_handoff_vision.example.json"
+  fi
+fi
 
 if [[ "${NO_VOICE}" == "true" ]]; then
   OOD_TTS_ENABLED=false
@@ -89,7 +111,7 @@ for path_var in FOOD_POLICY_CONFIG VISION_CONFIG OOD_DETECTOR_PATH OOD_TTS_CONFI
   fi
 done
 
-if [[ ! -d "${LEROBOT_MAIN_DIR}" ]]; then
+if [[ "${TEST_MODE}" != "true" && ! -d "${LEROBOT_MAIN_DIR}" ]]; then
   echo "Missing latest LeRobot checkout: ${LEROBOT_MAIN_DIR}" >&2
   echo "Expected it at vendor/lerobot-main." >&2
   exit 1
@@ -107,9 +129,13 @@ if [[ ! -f "${VISION_CONFIG}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${OOD_DETECTOR_PATH}" ]]; then
+if [[ "${TEST_MODE}" != "true" && ! -f "${OOD_DETECTOR_PATH}" ]]; then
   echo "Global OOD detector not found at: ${OOD_DETECTOR_PATH}" >&2
   echo "Continuing; a per-target ood_detector_path in the food config may be used instead." >&2
+fi
+
+if [[ "${TEST_AUDIO_PATH}" != "" && "${TEST_AUDIO_PATH}" != /* ]]; then
+  TEST_AUDIO_PATH="${ROOT_DIR}/${TEST_AUDIO_PATH}"
 fi
 
 CAMERAS="{ front: {type: opencv, index_or_path: ${CAMERA_FRONT_INDEX}, width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${FPS}}, side: {type: opencv, index_or_path: ${CAMERA_SIDE_INDEX}, width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${FPS}} }"
@@ -121,17 +147,40 @@ echo "OOD detector:    ${OOD_DETECTOR_PATH}"
 echo "Voice enabled:   ${OOD_TTS_ENABLED}"
 echo "STT enabled:     ${STT_ENABLED}"
 echo "Target override: ${TARGET:-none}"
+echo "Test mode:       ${TEST_MODE}"
+echo "Test audio:      ${TEST_AUDIO_PATH:-none}"
 echo "Duration:        ${DURATION}s"
 echo
-echo "Keep one hand near power/USB. Press Ctrl-C to stop."
+if [[ "${TEST_MODE}" == "true" ]]; then
+  echo "Test mode uses mocked hand, policy, action, success, and OOD paths."
+else
+  echo "Keep one hand near power/USB. Press Ctrl-C to stop."
+fi
+
+if [[ "${TEST_MODE}" == "true" ]]; then
+  exec uv run --project "${ROOT_DIR}" --python "${UV_PYTHON}" \
+    --with numpy --with scikit-learn --with torchvision --with opencv-python --with sounddevice \
+    python "${ROOT_DIR}/scripts/run_food_handoff_test.py" \
+    --food-policy-config="${FOOD_POLICY_CONFIG}" \
+    --target="${TARGET}" \
+    --stt-enabled="${STT_ENABLED}" \
+    --test-audio-path="${TEST_AUDIO_PATH}" \
+    --tts-enabled="${OOD_TTS_ENABLED}" \
+    --tts-config-path="${OOD_TTS_CONFIG_PATH}" \
+    --fps="${FPS}" \
+    --test-policy-steps="${TEST_POLICY_STEPS}" \
+    --test-success-after-steps="${TEST_SUCCESS_AFTER_STEPS}"
+fi
 
 cd "${LEROBOT_MAIN_DIR}"
+UV_PROJECT_DIR="${LEROBOT_MAIN_DIR}"
 export PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
-exec uv run --project "${LEROBOT_MAIN_DIR}" --python "${UV_PYTHON}" \
-  --extra dataset --extra hardware --extra viz --extra feetech \
-  --with numpy --with scikit-learn --with torchvision --with opencv-python --with sounddevice \
-  python "${ROOT_DIR}/scripts/run_food_handoff.py" \
+UV_RUN=(uv run --project "${UV_PROJECT_DIR}" --python "${UV_PYTHON}")
+UV_RUN+=(--extra dataset --extra hardware --extra viz --extra feetech)
+UV_RUN+=(--with numpy --with scikit-learn --with torchvision --with opencv-python --with sounddevice)
+
+exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --strategy.type=base \
   --policy.path="placeholder-selected-after-request" \
   --device="${POLICY_DEVICE}" \
@@ -157,4 +206,8 @@ exec uv run --project "${LEROBOT_MAIN_DIR}" --python "${UV_PYTHON}" \
   --ood_tts_enabled="${OOD_TTS_ENABLED}" \
   --ood_tts_config_path="${OOD_TTS_CONFIG_PATH}" \
   --ood_tts_every_n="${OOD_TTS_EVERY_N}" \
-  --ood_tts_queue_max="${OOD_TTS_QUEUE_MAX}"
+  --ood_tts_queue_max="${OOD_TTS_QUEUE_MAX}" \
+  --test_mode="${TEST_MODE}" \
+  --test_audio_path="${TEST_AUDIO_PATH}" \
+  --test_policy_steps="${TEST_POLICY_STEPS}" \
+  --test_success_after_steps="${TEST_SUCCESS_AFTER_STEPS}"

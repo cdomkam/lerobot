@@ -66,6 +66,10 @@ class FoodHandoffConfig(RolloutConfig):
     ood_tts_config_path: str = ".env"
     ood_tts_every_n: int = 30
     ood_tts_queue_max: int = 25
+    test_mode: bool = False
+    test_audio_path: str = ""
+    test_policy_steps: int = 5
+    test_success_after_steps: int = 3
 
 
 @parser.wrap()
@@ -105,7 +109,10 @@ def main(cfg: FoodHandoffConfig) -> None:
         raise ValueError("--target must be one of: strawberry, oreo, marshmallow")
 
     logger.info("Waiting for hand in camera frame...")
-    wait_for_hand(vision_config.hand, timeout_s=cfg.hand_wait_timeout_s)
+    if cfg.test_mode:
+        logger.info("[HAND] mocked present")
+    else:
+        wait_for_hand(vision_config.hand, timeout_s=cfg.hand_wait_timeout_s)
     logger.info("[HAND] present")
 
     if selected_target is None:
@@ -126,6 +133,10 @@ def main(cfg: FoodHandoffConfig) -> None:
         selected_policy.policy_repo_id,
         selected_policy.task,
     )
+
+    if cfg.test_mode:
+        run_mock_policy_flow(cfg, selected_policy, tts_worker)
+        return
 
     setattr(cfg.policy, "path", selected_policy.policy_repo_id)
     setattr(cfg, "task", selected_policy.task)
@@ -170,10 +181,21 @@ def main(cfg: FoodHandoffConfig) -> None:
         selected_policy=selected_policy,
         tts_worker=tts_worker,
         shutdown_event=shutdown_event,
+        vision_config=vision_config,
     )
 
 
 def listen_and_classify_request(cfg: FoodHandoffConfig, stt_config) -> str | None:
+    if cfg.test_mode and cfg.test_audio_path:
+        transcript = transcribe_audio_file(
+            stt_config,
+            cfg.test_audio_path,
+            keyterms=["Strawberry", "Oreo", "Marshmallow", "Marshmellow"],
+        )
+        target = classify_food_request(transcript)
+        logger.info("[REQUEST] test_audio=%s transcript=%r target=%s", cfg.test_audio_path, transcript, target)
+        return target
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         audio_path = Path(f.name)
     try:
@@ -252,6 +274,7 @@ def run_selected_policy(
     selected_policy,
     tts_worker: ElevenLabsTTSWorker | None,
     shutdown_event,
+    vision_config,
 ) -> None:
     robot = ctx.hardware.robot_wrapper
     processors = ctx.processors
@@ -377,6 +400,56 @@ def run_selected_policy(
             mean_score,
             detector.threshold,
         )
+
+
+def run_mock_policy_flow(
+    cfg: FoodHandoffConfig,
+    selected_policy,
+    tts_worker: ElevenLabsTTSWorker | None,
+) -> None:
+    if cfg.test_policy_steps <= 0:
+        raise ValueError("--test_policy_steps must be positive")
+    if cfg.test_success_after_steps <= 0:
+        raise ValueError("--test_success_after_steps must be positive")
+
+    logger.info(
+        "[POLICY] mocked starting target=%s policy=%s task=%r",
+        selected_policy.target,
+        selected_policy.policy_repo_id,
+        selected_policy.task,
+    )
+    success = False
+    success_frame = "none"
+    n_actions = 0
+    for step in range(1, cfg.test_policy_steps + 1):
+        logger.info("[MOCK_ACTION] frame=%d target=%s", step, selected_policy.target)
+        n_actions += 1
+        if step >= cfg.test_success_after_steps:
+            success = True
+            success_frame = step
+            logger.info(
+                "[TASK_SUCCESS] target=%s frame=%d confidence=1.000 mocked_success=true",
+                selected_policy.target,
+                step,
+            )
+            phrase = selected_policy.success_phrase or choose_success_phrase(
+                selected_policy.display_name
+            )
+            speak(tts_worker, phrase, wait=True)
+            break
+        time.sleep(1.0 / max(cfg.fps, 1))
+
+    if tts_worker is not None:
+        tts_worker.close(timeout=10.0)
+    logger.info(
+        "Run complete: target=%s success=%s success_frame=%s frames=%d actions=%d "
+        "ood=0 (0.0%%) mean_score=0.000 threshold=0.000 test_mode=true",
+        selected_policy.target,
+        success,
+        success_frame,
+        int(success_frame) if success else cfg.test_policy_steps,
+        n_actions,
+    )
 
 
 def speak(worker: ElevenLabsTTSWorker | None, phrase: str, wait: bool = False) -> None:

@@ -40,6 +40,27 @@ For local policy-path testing without voice or speech-to-text:
 Voice can be disabled independently with `--no-voice`. Speech-to-text can be
 disabled only when `--target strawberry|oreo|marshmallow` is supplied.
 
+For end-to-end local testing without LeRobot, robot hardware, policy checkpoints,
+or OOD detector files, use `--test-mode`. This mocks hand entry, policy actions,
+OOD, and success while still exercising ElevenLabs STT and target/policy
+selection:
+
+```bash
+./scripts/run_food_handoff.sh \
+  --test-mode --no-voice \
+  --test-audio recordings/voice_requests/strawberry_request.wav
+
+./scripts/run_food_handoff.sh \
+  --test-mode --no-voice \
+  --test-audio recordings/voice_requests/oreo_request.wav
+```
+
+To bypass STT in the same mocked loop:
+
+```bash
+./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target strawberry
+```
+
 ## Flow
 
 1. `WAIT_FOR_HAND`: Open the configured camera index and debounce hand entry in
