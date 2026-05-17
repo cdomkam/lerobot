@@ -17,19 +17,12 @@ existing hand can move out of frame before the next hand trigger.
 
 ## Setup
 
-Create local runtime configs:
-
-```bash
-cp config/food_policies.example.json config/food_policies.json
-cp config/food_handoff_vision.example.json config/food_handoff_vision.json
-```
-
-Then edit:
+Review the checked-in runtime configs:
 
 - `config/food_policies.json` with the three Hugging Face policy repo ids.
 - `config/food_handoff_vision.json` with camera ROI and color thresholds. The
-  example uses the front camera for hand entry and the side camera for placement
-  success, because the side view shows the food-in-hand state more clearly.
+  current config uses camera index 1 / `side` for both hand entry and placement
+  success, because that scene view shows the food-in-hand state more clearly.
 - `.env` with `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, and
   `ELEVENLABS_MODEL_ID` for text-to-speech.
 

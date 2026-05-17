@@ -104,9 +104,6 @@ if [[ "${TEST_MODE}" == "true" ]]; then
   if [[ "${FOOD_POLICY_CONFIG}" == "config/food_policies.json" ]]; then
     FOOD_POLICY_CONFIG="config/food_policies.test.json"
   fi
-  if [[ "${VISION_CONFIG}" == "config/food_handoff_vision.json" ]]; then
-    VISION_CONFIG="config/food_handoff_vision.example.json"
-  fi
 fi
 
 if [[ "${NO_VOICE}" == "true" ]]; then
@@ -138,13 +135,13 @@ fi
 
 if [[ ! -f "${FOOD_POLICY_CONFIG}" ]]; then
   echo "Missing food policy config: ${FOOD_POLICY_CONFIG}" >&2
-  echo "Copy config/food_policies.example.json to config/food_policies.json and fill in repo ids." >&2
+  echo "Expected config/food_policies.json with filled policy repo ids." >&2
   exit 1
 fi
 
 if [[ ! -f "${VISION_CONFIG}" ]]; then
   echo "Missing vision config: ${VISION_CONFIG}" >&2
-  echo "Copy config/food_handoff_vision.example.json to config/food_handoff_vision.json and tune ROIs." >&2
+  echo "Expected config/food_handoff_vision.json with tuned scene-camera ROIs." >&2
   exit 1
 fi
 

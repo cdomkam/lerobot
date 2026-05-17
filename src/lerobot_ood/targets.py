@@ -66,8 +66,7 @@ def load_food_policy_config(path: str | Path) -> FoodPolicyConfig:
     if not config_path.is_file():
         raise FileNotFoundError(
             f"Food policy config not found: {config_path}. "
-            "Copy config/food_policies.example.json to config/food_policies.json "
-            "and fill in the policy repo ids."
+            "Expected config/food_policies.json with filled policy repo ids."
         )
 
     raw = json.loads(config_path.read_text())

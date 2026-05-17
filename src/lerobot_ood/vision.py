@@ -123,8 +123,7 @@ def load_vision_config(path: str | Path) -> FoodHandoffVisionConfig:
     if not config_path.is_file():
         raise FileNotFoundError(
             f"Vision config not found: {config_path}. "
-            "Copy config/food_handoff_vision.example.json to config/food_handoff_vision.json "
-            "and tune the ROIs for the camera view."
+            "Expected config/food_handoff_vision.json with tuned scene-camera ROIs."
         )
     raw = json.loads(config_path.read_text())
     hand_raw = raw.get("hand", {})

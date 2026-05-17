@@ -104,19 +104,12 @@ Run complete: target=strawberry success=True ... test_mode=true
 
 ## Robot Handoff
 
-Create local runtime configs:
-
-```bash
-cp config/food_policies.example.json config/food_policies.json
-cp config/food_handoff_vision.example.json config/food_handoff_vision.json
-```
-
-Edit:
+Review the checked-in runtime configs:
 
 - `config/food_policies.json` with the Strawberry, Oreo, and Marshmallow policy
   repo ids and any per-target OOD detector paths.
-- `config/food_handoff_vision.json` with the actual hand ROI, success ROI, and
-  color thresholds for the camera setup.
+- `config/food_handoff_vision.json` with the scene-camera hand ROI, success ROI,
+  and color thresholds for the camera setup.
 - `.env` with ElevenLabs credentials.
 
 Run the same flow against the robot by removing `--test-mode`:
