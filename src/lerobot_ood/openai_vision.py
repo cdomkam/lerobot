@@ -74,22 +74,29 @@ def load_openai_vision_config(path: str | Path) -> OpenAIVisionConfig:
 
 def confirm_food_handoff_success(
     config: OpenAIVisionConfig,
-    frame_rgb: np.ndarray,
+    frame_rgb,
     target_display_name: str,
     opener=urllib.request.urlopen,
 ) -> OpenAISuccessResult:
     """Ask a vision model whether the robot is placing the target food in the user's hand."""
+    frames = _normalize_frames(frame_rgb)
+    frame_word = "image" if len(frames) == 1 else f"{len(frames)} images"
     prompt = (
-        "You are evaluating an SO-101 robot food handoff. Judge only the image. "
+        "You are evaluating an SO-101 robot food handoff. "
+        f"You will receive {frame_word} from the side camera. If multiple images are provided, "
+        "they are ordered from oldest to newest. Judge the sequence, not each frame in isolation. "
         "The user hand is a human hand, not the robot gripper. "
         f"The target food is: {target_display_name}. "
-        "Be strict: success requires visible evidence that the robot is actively placing or has "
-        "just released the correct target food into the human/user hand. The robot arm or gripper "
-        "must be visible and near the user's hand, and the correct target food must be in or on "
-        "the user's hand. It is not success if the robot is stalled, absent, too far away, holding "
-        "nothing, holding the wrong item, or if the user appears to have grabbed the food from the "
-        "tray, table, or robot without a robot placement. It is not success if the food is only in "
-        "the robot gripper or only on the tray/table. If unsure, set success-relevant booleans false "
+        "Be strict: success requires visible sequence evidence that the robot moves, places, or "
+        "releases the correct target food into the human/user hand. The robot arm or gripper must "
+        "be visible near the user's hand during the transfer, and the newest image must show the "
+        "correct target food in or on the user's hand. It is not success if the robot is stalled, "
+        "absent, too far away, holding nothing, holding the wrong item, still solely holding the "
+        "item in its gripper, or if the user appears to have grabbed the food from the tray, table, "
+        "or robot without a robot placement. It is not success if the food is only on the tray/table. "
+        "For target_food_in_robot_gripper and target_food_on_tray, answer about the newest image. "
+        "For robot_placing_target_in_user_hand, answer true only when the provided sequence shows "
+        "robot-to-hand placement or release evidence. If unsure, set success-relevant booleans false "
         "and use low confidence. "
         "Return strict JSON only with this shape: "
         '{"user_hand_present":true,"robot_visible":true,'
@@ -99,22 +106,24 @@ def confirm_food_handoff_success(
         '"correct_target_food":true,"user_grabbing_without_robot_placement":false,'
         '"confidence":0.0,"reason":"short"}'
     )
+    content = [{"type": "input_text", "text": prompt}]
+    content.extend(
+        {
+            "type": "input_image",
+            "image_url": _frame_to_data_url(
+                frame,
+                max_width=config.max_image_width,
+                jpeg_quality=config.jpeg_quality,
+            ),
+        }
+        for frame in frames
+    )
     payload = {
         "model": config.model,
         "input": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {
-                        "type": "input_image",
-                        "image_url": _frame_to_data_url(
-                            frame_rgb,
-                            max_width=config.max_image_width,
-                            jpeg_quality=config.jpeg_quality,
-                        ),
-                    },
-                ],
+                "content": content,
             }
         ],
         "max_output_tokens": 300,
@@ -160,6 +169,7 @@ def confirm_food_handoff_success(
         and target_food_visible
         and target_food_in_user_hand
         and correct_target_food
+        and not bool(parsed.get("target_food_in_robot_gripper"))
         and not target_food_on_tray
         and not user_grabbing_without_robot_placement
         and confidence >= config.min_confidence
@@ -180,6 +190,16 @@ def confirm_food_handoff_success(
         reason=str(parsed.get("reason", "")).strip(),
         raw_text=raw_text,
     )
+
+
+def _normalize_frames(frame_rgb) -> list[np.ndarray]:
+    if isinstance(frame_rgb, np.ndarray):
+        frames = [frame_rgb]
+    else:
+        frames = list(frame_rgb)
+    if not frames:
+        raise ValueError("expected at least one frame for OpenAI success confirmation")
+    return frames
 
 
 def _frame_to_data_url(frame_rgb: np.ndarray, max_width: int, jpeg_quality: int) -> str:

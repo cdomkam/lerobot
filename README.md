@@ -67,24 +67,27 @@ for the actual robot cycle.
   runner speaks the fetching phrase and starts the selected policy immediately.
 - **Policy selection:** `config/food_policies.json` maps the classified food to
   a Hugging Face policy repo, task prompt, and per-target OOD detector.
-- **Policy execution:** the selected LeRobot policy runs on SO-101 for
-  `DURATION` seconds or until success is detected.
+- **Policy execution:** the selected LeRobot policy sends actions to SO-101 for
+  `DURATION` seconds or until success is detected. After `DURATION`, the robot
+  stops sending actions and the loop keeps checking side-camera success for
+  `OPENAI_SUCCESS_GRACE_S` seconds before returning timeout.
 - **OOD scoring:** the ACT backbone encoder scores the configured `OOD_CAMERA`
   against the target detector `.npz`. OOD events are logged and can trigger
   ElevenLabs voice alerts, but they do not stop the policy.
 - **Success detection:** the side camera, named `side`, maps to
   `CAMERA_SIDE_INDEX=1` and is the scene camera in the current setup. When
-  OpenAI success is enabled, the loop sends that frame to `gpt-5.4-nano` every
-  `OPENAI_SUCCESS_EVERY_N` frames and immediately on any local ROI/color success
-  candidate. Success is accepted only when the model sees the correct target
-  food in the user's hand and visible evidence that the robot gripper is near the
-  hand and actively placing or just releasing that food. It is not success if the
-  robot is stalled, absent, holding the wrong item, holding the item away from
-  the hand, or if the user grabs the item without robot placement. Confidence
-  must be at least `OPENAI_SUCCESS_MIN_CONFIDENCE` from `.env` (default `0.70`).
-  Local OpenCV ROI/color detection is only a candidate trigger/log signal; it is
-  not accepted as success when OpenAI is disabled or when OpenAI confirmation
-  fails.
+  OpenAI success is enabled, the loop sends an ordered short sequence of recent
+  side-camera frames to `gpt-5.4-nano` every `OPENAI_SUCCESS_EVERY_N` frames and
+  immediately on any local ROI/color success candidate. Success is accepted only
+  when the sequence shows the robot gripper near the hand placing or releasing
+  the correct target food, and the newest frame shows that food in the user's
+  hand, not still solely held by the gripper or sitting on the tray/table. It is
+  not success if the robot is stalled, absent, holding the wrong item, holding
+  the item away from the hand, or if the user grabs the item without robot
+  placement. Confidence must be at least `OPENAI_SUCCESS_MIN_CONFIDENCE` from
+  `.env` (default `0.70`). Local OpenCV ROI/color detection is only a candidate
+  trigger/log signal; it is not accepted as success when OpenAI is disabled or
+  when OpenAI confirmation fails.
 - **Reset/repeat:** robot mode loops until interrupted by default. Test mode
   runs one cycle by default. Use `--max-cycles N` to bound either mode, or
   `--max-cycles 0` for an unlimited loop.
@@ -251,7 +254,7 @@ Expected successful logs include:
 [REQUEST] target=strawberry policy=...
 [TTS] queue wait=True phrase='...Strawberry...'
 [POLICY] starting target=strawberry ...
-[OPENAI_SUCCESS] frame=... success=True ... robot_placing=True ...
+[OPENAI_SUCCESS] frame=... sequence_frames=5 success=True ... robot_placing=True ...
 [TASK_SUCCESS] target=strawberry frame=... source=openai opencv_score=...
 [TTS] queue wait=True phrase='...Strawberry...'
 [CYCLE] complete cycle=1 outcome=success
@@ -271,6 +274,9 @@ OOD_CAMERA=front
 OPENAI_SUCCESS_ENABLED=true      # default; required for automatic robot success
 OPENAI_SUCCESS_CONFIG_PATH=.env
 OPENAI_SUCCESS_EVERY_N=15        # minimum frames between OpenAI confirmation calls
+OPENAI_SUCCESS_SEQUENCE_FRAMES=5 # number of side-camera frames sent per check
+OPENAI_SUCCESS_SEQUENCE_STRIDE=5 # frame spacing inside the success sequence
+OPENAI_SUCCESS_GRACE_S=15        # post-action window for pending/final success checks
 DURATION=30
 ```
 

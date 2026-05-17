@@ -93,14 +93,16 @@ Debug-only overrides are available as `--no-voice` and
 3. `LOAD_OR_SELECT_POLICY`: The lower-level runner loads the policy repo id from
    `food_policies.json`.
 4. `FETCHING_TTS`: ElevenLabs speaks the fetching phrase for the selected food.
-5. `RUN_POLICY`: The selected LeRobot policy starts immediately.
-6. `SUCCESS`: GPT-5.4-nano checks side-camera frames in the background. Success
-   requires the correct target food in the user's hand plus visible evidence that
-   the robot gripper is near the hand and actively placing or just releasing that
-   food. A stalled robot, wrong item, item only on the tray, item only in the
-   gripper, or user grab without robot placement must be rejected. Local
-   ROI/color detection is only a candidate trigger/log signal, not an accepted
-   success source.
+5. `RUN_POLICY`: The selected LeRobot policy starts immediately. Policy actions
+   stop at `DURATION`; the loop then enters a post-action OpenAI success grace
+   window before declaring timeout.
+6. `SUCCESS`: GPT-5.4-nano checks an ordered short sequence of recent
+   side-camera frames in the background. Success requires the sequence to show
+   the robot gripper near the hand placing or releasing the correct target food,
+   and the newest frame must show that food in the user's hand rather than still
+   solely in the gripper or on the tray/table. A stalled robot, wrong item, or
+   user grab without robot placement must be rejected. Local ROI/color detection
+   is only a candidate trigger/log signal, not an accepted success source.
 7. `OOD`: Speak an OOD phrase on scene OOD or unclassified requests.
 8. `RESET_PAUSE`: Wait 5-10 seconds, default 7, so the scene can be reset.
 9. Return to `LISTEN` unless the max cycle count was reached or the process was
@@ -117,7 +119,7 @@ Expected log markers:
 [TTS] queue wait=True phrase='...Oreo...'
 [POLICY] starting target=oreo fps=30 duration=30s
 [OOD] frame=87 score=34.219 threshold=21.080
-[OPENAI_SUCCESS] frame=... success=True confidence=...
+[OPENAI_SUCCESS] frame=... sequence_frames=5 success=True confidence=...
 [TASK_SUCCESS] target=oreo frame=342 source=openai opencv_score=...
 Run complete: target=oreo success=True success_frame=342 ...
 [CYCLE] complete cycle=1 outcome=success

@@ -89,6 +89,9 @@ OOD_TTS_QUEUE_MAX="${OOD_TTS_QUEUE_MAX:-25}"
 OPENAI_SUCCESS_ENABLED="${OPENAI_SUCCESS_ENABLED:-true}"
 OPENAI_SUCCESS_CONFIG_PATH="${OPENAI_SUCCESS_CONFIG_PATH:-.env}"
 OPENAI_SUCCESS_EVERY_N="${OPENAI_SUCCESS_EVERY_N:-15}"
+OPENAI_SUCCESS_SEQUENCE_FRAMES="${OPENAI_SUCCESS_SEQUENCE_FRAMES:-5}"
+OPENAI_SUCCESS_SEQUENCE_STRIDE="${OPENAI_SUCCESS_SEQUENCE_STRIDE:-5}"
+OPENAI_SUCCESS_GRACE_S="${OPENAI_SUCCESS_GRACE_S:-15}"
 RESULT_JSON_PATH="${RESULT_JSON_PATH:-}"
 STT_ENABLED="${STT_ENABLED:-true}"
 REQUEST_AUDIO_SECONDS="${REQUEST_AUDIO_SECONDS:-3}"
@@ -196,6 +199,8 @@ echo "OOD detector:    ${OOD_DETECTOR_PATH}"
 echo "OOD enabled:     ${OOD_ENABLED}"
 echo "OOD every N:     ${OOD_EVERY_N}"
 echo "OpenAI success:  ${OPENAI_SUCCESS_ENABLED}"
+echo "OpenAI sequence: ${OPENAI_SUCCESS_SEQUENCE_FRAMES} frame(s), stride ${OPENAI_SUCCESS_SEQUENCE_STRIDE}"
+echo "OpenAI grace:    ${OPENAI_SUCCESS_GRACE_S}s"
 echo "Voice enabled:   ${OOD_TTS_ENABLED}"
 echo "STT enabled:     ${STT_ENABLED}"
 echo "Target override: ${TARGET:-none}"
@@ -271,6 +276,9 @@ exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --openai_success_enabled="${OPENAI_SUCCESS_ENABLED}" \
   --openai_success_config_path="${OPENAI_SUCCESS_CONFIG_PATH}" \
   --openai_success_every_n="${OPENAI_SUCCESS_EVERY_N}" \
+  --openai_success_sequence_frames="${OPENAI_SUCCESS_SEQUENCE_FRAMES}" \
+  --openai_success_sequence_stride="${OPENAI_SUCCESS_SEQUENCE_STRIDE}" \
+  --openai_success_grace_s="${OPENAI_SUCCESS_GRACE_S}" \
   --test_mode="${TEST_MODE}" \
   --test_audio_path="${TEST_AUDIO_PATH}" \
   --max_cycles="${MAX_CYCLES}" \
