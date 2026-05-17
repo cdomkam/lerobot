@@ -948,7 +948,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-dir", type=Path, default=SCRIPT_DIR)
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     parser.add_argument("--model", default=os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2"))
-    parser.add_argument("--voice", default=os.environ.get("OPENAI_REALTIME_VOICE", "ash"))
+    parser.add_argument("--voice", default=os.environ.get("OPENAI_REALTIME_VOICE", "ballad"))
     parser.add_argument("--api-key-env", default="OAI_KEY")
     barge_group = parser.add_mutually_exclusive_group()
     barge_group.add_argument(
