@@ -16,8 +16,10 @@ Edit `.env` with:
 ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=...
 ELEVENLABS_MODEL_ID=eleven_v3
-ELEVENLABS_STT_MODEL_ID=scribe_v2
 ```
+
+Speech-to-text uses ElevenLabs `scribe_v2` internally. `ELEVENLABS_MODEL_ID`
+is only for text-to-speech.
 
 For robot execution, this branch expects a latest LeRobot checkout at
 `vendor/lerobot-main`:

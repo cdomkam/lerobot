@@ -102,7 +102,7 @@ def main(cfg: FoodHandoffConfig) -> None:
     stt_config = None
     if cfg.stt_enabled:
         stt_config = load_elevenlabs_stt_config(cfg.ood_tts_config_path)
-        logger.info("ElevenLabs STT enabled (model_id=%s)", stt_config.model_id)
+        logger.info("ElevenLabs STT enabled (model_id=scribe_v2)")
 
     selected_target = canonicalize_target(cfg.target)
     if cfg.target and selected_target is None:

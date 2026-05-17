@@ -18,7 +18,6 @@ from .tts import load_env_file
 @dataclass(frozen=True)
 class ElevenLabsSTTConfig:
     api_key: str
-    model_id: str = "scribe_v2"
     api_base_url: str = "https://api.elevenlabs.io"
     timeout_s: float = 30.0
     language_code: str = "en"
@@ -42,7 +41,6 @@ def load_elevenlabs_stt_config(path: str | Path) -> ElevenLabsSTTConfig:
         )
     return ElevenLabsSTTConfig(
         api_key=api_key,
-        model_id=values.get("ELEVENLABS_STT_MODEL_ID", "scribe_v2").strip() or "scribe_v2",
         api_base_url=values.get("ELEVENLABS_API_BASE_URL", "https://api.elevenlabs.io").rstrip("/"),
         timeout_s=float(values.get("ELEVENLABS_TIMEOUT_S", "30")),
         language_code=values.get("ELEVENLABS_STT_LANGUAGE_CODE", "en").strip() or "en",
@@ -57,7 +55,7 @@ def transcribe_audio_file(
 ) -> str:
     audio = Path(audio_path)
     fields: list[tuple[str, str]] = [
-        ("model_id", config.model_id),
+        ("model_id", "scribe_v2"),
         ("tag_audio_events", "false"),
         ("diarize", "false"),
         ("timestamps_granularity", "none"),

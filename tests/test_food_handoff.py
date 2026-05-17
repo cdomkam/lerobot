@@ -89,7 +89,6 @@ class FoodHandoffTest(unittest.TestCase):
             opener = Mock(return_value=FakeResponse({"text": "Bring me the Oreo"}))
             config = stt.ElevenLabsSTTConfig(
                 api_key="key",
-                model_id="scribe_v2",
                 api_base_url="https://example.test",
             )
 

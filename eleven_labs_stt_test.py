@@ -52,7 +52,7 @@ def main() -> None:
         raise SystemExit(1) from exc
 
     target = targets.classify_food_request(transcript)
-    print(f"model_id={config.model_id}")
+    print("model_id=scribe_v2")
     print(f"transcript={transcript}")
     print(f"target={target or 'unclassified'}")
     print("elevenlabs_stt_smoke_ok")

@@ -20,7 +20,8 @@ Then edit:
   example uses the front camera for hand entry and the side camera for placement
   success, because the side view shows the food-in-hand state more clearly.
 - `.env` with `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`,
-  `ELEVENLABS_MODEL_ID`, and optionally `ELEVENLABS_STT_MODEL_ID=scribe_v2`.
+  and `ELEVENLABS_MODEL_ID` for text-to-speech. Speech-to-text uses ElevenLabs
+  `scribe_v2` internally because the STT endpoint only accepts Scribe models.
 
 The canonical target enum is `marshmallow`; the speech classifier also accepts
 the spoken/transcribed misspelling `marshmellow`.
