@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+LEROBOT_MAIN_DIR="${LEROBOT_MAIN_DIR:-${ROOT_DIR}/vendor/lerobot-main}"
+if [[ "${LEROBOT_MAIN_DIR}" != /* ]]; then
+  LEROBOT_MAIN_DIR="${ROOT_DIR}/${LEROBOT_MAIN_DIR}"
+fi
+
 ROBOT_PORT="${ROBOT_PORT:-/dev/cu.usbmodem5C4C1268491}"
 ROBOT_ID="${ROBOT_ID:-so101_follower}"
 POLICY_REPO_ID="${POLICY_REPO_ID:-ofcourseistillloveyou/act-so101-feed-me-vai-10ep-run1}"
@@ -19,6 +26,10 @@ RESET_TIME_S="${RESET_TIME_S:-10}"
 FPS="${FPS:-30}"
 PUSH_TO_HUB="${PUSH_TO_HUB:-false}"
 DISPLAY_DATA="${DISPLAY_DATA:-true}"
+DEBUG_ACTIONS="${DEBUG_ACTIONS:-false}"
+DEBUG_SEND_ACTIONS="${DEBUG_SEND_ACTIONS:-false}"
+DEBUG_ACTION_LOG="${DEBUG_ACTION_LOG:-${ROOT_DIR}/logs/policy_action_debug_${RUN_ID}.jsonl}"
+DEBUG_LOG_EVERY_N="${DEBUG_LOG_EVERY_N:-1}"
 
 CAMERA_FRONT_INDEX="${CAMERA_FRONT_INDEX:-0}"
 CAMERA_SIDE_INDEX="${CAMERA_SIDE_INDEX:-1}"
@@ -33,9 +44,43 @@ echo "Policy chunk:    ${POLICY_CHUNK_SIZE}"
 echo "Action steps:    ${POLICY_N_ACTION_STEPS}"
 echo "Rollout dataset: ${DATASET_REPO_ID}"
 echo "Robot port:      ${ROBOT_PORT}"
+echo "Debug actions:   ${DEBUG_ACTIONS}"
+if [[ "${DEBUG_ACTIONS}" == "true" ]]; then
+  echo "Debug output:    ${DEBUG_ACTION_LOG}"
+  echo "Debug sends:     ${DEBUG_SEND_ACTIONS}"
+fi
 echo "Python:          ${UV_PYTHON}"
 echo
 echo "Keep one hand near power/USB. Press Ctrl-C to stop the policy."
+
+if [[ "${DEBUG_ACTIONS}" == "true" ]]; then
+  if [[ ! -d "${LEROBOT_MAIN_DIR}" ]]; then
+    echo "Missing latest LeRobot checkout: ${LEROBOT_MAIN_DIR}" >&2
+    echo "Expected it at vendor/lerobot-main." >&2
+    exit 1
+  fi
+
+  cd "${LEROBOT_MAIN_DIR}"
+  exec uv run --project "${LEROBOT_MAIN_DIR}" --python "${UV_PYTHON}" \
+    --extra dataset --extra hardware --extra viz --extra feetech \
+    python "${ROOT_DIR}/scripts/debug_policy_actions.py" \
+    --strategy.type=base \
+    --policy.path="${POLICY_REPO_ID}" \
+    --policy.device="${POLICY_DEVICE}" \
+    --policy.chunk_size="${POLICY_CHUNK_SIZE}" \
+    --policy.n_action_steps="${POLICY_N_ACTION_STEPS}" \
+    --device="${POLICY_DEVICE}" \
+    --robot.type=so101_follower \
+    --robot.port="${ROBOT_PORT}" \
+    --robot.id="${ROBOT_ID}" \
+    --robot.cameras="${CAMERAS}" \
+    --task="${TASK}" \
+    --fps="${FPS}" \
+    --duration="${EPISODE_TIME_S}" \
+    --output_path="${DEBUG_ACTION_LOG}" \
+    --send_actions="${DEBUG_SEND_ACTIONS}" \
+    --log_every_n="${DEBUG_LOG_EVERY_N}"
+fi
 
 exec uvx --python "${UV_PYTHON}" --from 'lerobot[feetech]' lerobot-record \
   --robot.type=so101_follower \

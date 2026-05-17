@@ -42,10 +42,10 @@ class ApiPolicyConfig:
     # The local SO-101 follower uses degrees for the first 5 joints and 0..100 for gripper.
     # Most external VLA servers use radians for arm joints; convert by default.
     api_state_units: str = "radians"  # "robot" or "radians"
-    api_action_units: str = "radians"  # "robot" or "radians"
-    gripper_action_units: str = "minus1_1"  # "robot" or "minus1_1"
-    max_joint_step_deg: float = 1.0
-    max_gripper_step: float = 2.0
+    api_action_units: str = "robot"  # "robot" or "radians"
+    gripper_action_units: str = "robot"  # "robot" or "minus1_1"
+    max_joint_step_deg: float = 0.5
+    max_gripper_step: float = 1.0
     front_camera: str = "front"
     side_camera: str = "side"
     state_keys: list[str] = field(

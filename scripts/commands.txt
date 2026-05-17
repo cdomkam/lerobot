@@ -35,6 +35,15 @@ TARGET_REPO_ID=ofcourseistillloveyou/so101_recording_marshmellow \
 STEPS=3000 BATCH_SIZE=16 POLICY_REPO_ID=ofcourseistillloveyou/so-101-feed-me-act-v2 ./scripts/train_on_modal.sh
 JOB_NAME=so101-feed-me-act RESUME=true STEPS=3000 BATCH_SIZE=16 POLICY_REPO_ID=ofcourseistillloveyou/so-101-feed-me-act-v2 ./scripts/train_on_modal.sh
 
+POLICY_REPO_ID=ofcourseistillloveyou/act-so101-marshmellow-num20-chunk25 \
+POLICY_CHUNK_SIZE=25 \
+POLICY_N_ACTION_STEPS=25 \
+TASK="Pick up the marshmellow and put it in the hand" \
+DEBUG_ACTIONS=true \
+DEBUG_SEND_ACTIONS=false \
+EPISODE_TIME_S=10 \
+./scripts/run_policy_on_robot.sh
+
 TOKEN="<api token>" \
 FPS=50 \
 CAMERA_FPS=30 \
