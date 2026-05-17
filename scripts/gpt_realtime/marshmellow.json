@@ -1,0 +1,9 @@
+{
+  "POLICY_REPO_ID": "ofcourseistillloveyou/act-so101-marshmellow-num20-chunk25",
+  "POLICY_CHUNK_SIZE": "25",
+  "POLICY_N_ACTION_STEPS": "25",
+  "TASK": "Pick up the marshmellow and put it in the hand",
+  "DEBUG_ACTIONS": "true",
+  "DEBUG_SEND_ACTIONS": "false",
+  "EPISODE_TIME_S": "10"
+}

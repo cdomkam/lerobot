@@ -1,0 +1,9 @@
+{
+  "POLICY_REPO_ID": "ofcourseistillloveyou/act-so101-oreo-num40-chunk25",
+  "POLICY_CHUNK_SIZE": "25",
+  "POLICY_N_ACTION_STEPS": "25",
+  "TASK": "Pick up the oreo and put it in the hand",
+  "DEBUG_ACTIONS": "true",
+  "DEBUG_SEND_ACTIONS": "false",
+  "EPISODE_TIME_S": "10"
+}
