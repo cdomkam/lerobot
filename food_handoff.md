@@ -1,8 +1,18 @@
 # Food Handoff Runtime
 
-This flow waits for a hand, records a short voice request, classifies the request as
-`strawberry`, `oreo`, or `marshmallow`, runs the matching policy, detects whether
-the food reaches the hand, and speaks success or OOD audio through ElevenLabs.
+This flow waits for a hand, records a short voice request, classifies the request
+as `strawberry`, `oreo`, or `marshmallow`, runs the matching policy, detects
+whether the food reaches the hand, and speaks success or OOD audio through
+ElevenLabs.
+
+Mock mode and robot mode follow the same sequence. `--test-mode` replaces
+LeRobot, hardware, policy execution, OOD scoring, and success detection with
+deterministic mocks. Removing `--test-mode` runs the same flow against the
+SO-101.
+
+The current command runs one handoff cycle per process. It loops over camera and
+policy frames during that cycle, then exits after success, OOD/unclassified
+request, timeout, or interruption.
 
 ## Setup
 
@@ -19,47 +29,55 @@ Then edit:
 - `config/food_handoff_vision.json` with camera ROI and color thresholds. The
   example uses the front camera for hand entry and the side camera for placement
   success, because the side view shows the food-in-hand state more clearly.
-- `.env` with `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`,
-  and `ELEVENLABS_MODEL_ID` for text-to-speech. Speech-to-text uses ElevenLabs
-  `scribe_v2` internally because the STT endpoint only accepts Scribe models.
+- `.env` with `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, and
+  `ELEVENLABS_MODEL_ID` for text-to-speech.
+
+There is no separate STT model setting. Speech-to-text uses ElevenLabs
+`scribe_v2` internally because the STT endpoint accepts Scribe models rather
+than TTS models such as `eleven_v3`.
 
 The canonical target enum is `marshmallow`; the speech classifier also accepts
 the spoken/transcribed misspelling `marshmellow`.
 
-## Run
+## Mocked Local Run
 
-```bash
-./scripts/run_food_handoff.sh
-```
-
-For local policy-path testing without voice or speech-to-text:
-
-```bash
-./scripts/run_food_handoff.sh --no-voice --no-stt --target strawberry
-```
-
-Voice can be disabled independently with `--no-voice`. Speech-to-text can be
-disabled only when `--target strawberry|oreo|marshmallow` is supplied.
-
-For end-to-end local testing without LeRobot, robot hardware, policy checkpoints,
-or OOD detector files, use `--test-mode`. This mocks hand entry, policy actions,
-OOD, and success while still exercising ElevenLabs STT and target/policy
-selection:
+Use `--test-mode` for the simple local path. This does not connect to SO-101 and
+does not require LeRobot, policy checkpoints, or OOD detector files:
 
 ```bash
 ./scripts/run_food_handoff.sh \
-  --test-mode --no-voice \
+  --test-mode \
   --test-audio recordings/voice_requests/strawberry_request.wav
+```
 
+Disable speaker output:
+
+```bash
 ./scripts/run_food_handoff.sh \
   --test-mode --no-voice \
   --test-audio recordings/voice_requests/oreo_request.wav
 ```
 
-To bypass STT in the same mocked loop:
+Bypass STT and force a target:
 
 ```bash
 ./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target strawberry
+```
+
+## Robot Run
+
+Run the same flow against SO-101 by removing `--test-mode`:
+
+```bash
+./scripts/run_food_handoff.sh
+```
+
+Voice can be disabled independently with `--no-voice`. Speech-to-text can be
+disabled only when `--target strawberry|oreo|marshmallow` is supplied:
+
+```bash
+./scripts/run_food_handoff.sh --no-voice
+./scripts/run_food_handoff.sh --no-voice --no-stt --target strawberry
 ```
 
 ## Flow
@@ -74,6 +92,9 @@ To bypass STT in the same mocked loop:
 6. `SUCCESS`: Detect target-colored pixels in the configured hand ROI for a
    stable debounce window, then speak success.
 7. `OOD`: Speak an OOD phrase on scene OOD or unclassified requests.
+
+After step 6 or 7, the process exits today. A future continuous mode can wrap
+this cycle and return to `WAIT_FOR_HAND`.
 
 ## Logs
 

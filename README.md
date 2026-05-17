@@ -1,7 +1,19 @@
-# SO-101 LeRobot Helpers
+# SO-101 Voice-Gated Food Handoff
 
-Operational scripts for SO-101 data collection, policy rollout, OOD detection,
-and voice-gated food handoff.
+This branch contains the SO-101 helpers plus a voice-gated food handoff flow for
+Strawberry, Oreo, and Marshmallow policies.
+
+The handoff flow is the same in mock mode and robot mode:
+
+1. Wait for a hand in the camera frame.
+2. Record a short user request.
+3. Transcribe with ElevenLabs STT and classify the target policy.
+4. Run the selected food handoff policy.
+5. Detect success or OOD.
+6. Speak the outcome with ElevenLabs TTS.
+
+The current runner executes one handoff cycle per process. Test mode mocks the
+LeRobot/robot pieces; robot mode removes that flag and connects to SO-101.
 
 ## Setup
 
@@ -18,8 +30,10 @@ ELEVENLABS_VOICE_ID=...
 ELEVENLABS_MODEL_ID=eleven_v3
 ```
 
-Speech-to-text uses ElevenLabs `scribe_v2` internally. `ELEVENLABS_MODEL_ID`
-is only for text-to-speech.
+There is no separate STT model setting. `ELEVENLABS_MODEL_ID` configures
+text-to-speech output. Speech-to-text uses ElevenLabs `scribe_v2` internally,
+because the STT endpoint accepts Scribe models rather than TTS models such as
+`eleven_v3`.
 
 For robot execution, this branch expects a latest LeRobot checkout at
 `vendor/lerobot-main`:
@@ -28,47 +42,12 @@ For robot execution, this branch expects a latest LeRobot checkout at
 ./scripts/update_lerobot_latest.sh
 ```
 
-## Local Tests
+## Mocked Local Test
 
-Run unit tests:
-
-```bash
-PYTHONPATH=src python3 -m unittest tests/test_tts.py tests/test_food_handoff.py
-uv run python -m unittest discover -s tests
-```
-
-Check the ElevenLabs TTS path and laptop speaker output:
-
-```bash
-python3 eleven_labs_test.py
-```
-
-Check one recorded request clip through ElevenLabs STT and target
-classification:
-
-```bash
-python3 eleven_labs_stt_test.py recordings/voice_requests/strawberry_request.wav
-python3 eleven_labs_stt_test.py recordings/voice_requests/oreo_request.wav
-```
-
-## Mocked Handoff Flow
-
-Use `--test-mode` to test the handoff flow without connecting to the SO-101,
-without loading LeRobot rollout code, and without requiring policy checkpoints
-or OOD detector files. Test mode mocks hand entry, policy actions, OOD, and
-success while still exercising ElevenLabs STT and target/policy selection.
-
-```bash
-./scripts/run_food_handoff.sh \
-  --test-mode --no-voice \
-  --test-audio recordings/voice_requests/strawberry_request.wav
-
-./scripts/run_food_handoff.sh \
-  --test-mode --no-voice \
-  --test-audio recordings/voice_requests/oreo_request.wav
-```
-
-With success voice enabled:
+Use `--test-mode` to run the handoff flow without connecting to SO-101, without
+loading LeRobot rollout code, and without requiring policy checkpoints or OOD
+detector files. It still exercises ElevenLabs STT, target classification, policy
+selection, success/OOD handling, and optional TTS.
 
 ```bash
 ./scripts/run_food_handoff.sh \
@@ -76,47 +55,33 @@ With success voice enabled:
   --test-audio recordings/voice_requests/strawberry_request.wav
 ```
 
-Bypass STT but keep the mocked handoff loop:
+Disable speaker output while keeping the same mocked loop:
 
 ```bash
-./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target strawberry
+./scripts/run_food_handoff.sh \
+  --test-mode --no-voice \
+  --test-audio recordings/voice_requests/oreo_request.wav
 ```
 
-The expected successful path logs:
+Bypass STT and force a target:
+
+```bash
+./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target marshmallow
+```
+
+Expected successful mock logs include:
 
 ```text
 [HAND] mocked present
-[REQUEST] transcript='Please put the strawberry in my hand' target=strawberry
+[REQUEST] test_audio=... transcript='Please put the strawberry in my hand' target=strawberry
+[REQUEST] target=strawberry policy=...
 [POLICY] mocked starting target=strawberry ...
 [MOCK_ACTION] frame=1 target=strawberry
 [TASK_SUCCESS] target=strawberry frame=3 confidence=1.000 mocked_success=true
 Run complete: target=strawberry success=True ... test_mode=true
 ```
 
-## Dataset Fixture Replay
-
-Download and extract non-robot vision fixtures from a Hugging Face LeRobot
-dataset:
-
-```bash
-uv run python scripts/extract_handoff_fixtures.py \
-  --download \
-  --repo-id ofcourseistillloveyou/so101_recording_strawberry_num40_20260516_161110
-```
-
-Replay local transcript classification and ROI success detection:
-
-```bash
-uv run python scripts/replay_handoff_mock.py
-```
-
-To include ElevenLabs STT over local audio clips:
-
-```bash
-uv run python scripts/replay_handoff_mock.py --use-stt
-```
-
-## Robot Handoff Flow
+## Robot Handoff
 
 Create local runtime configs:
 
@@ -125,30 +90,59 @@ cp config/food_policies.example.json config/food_policies.json
 cp config/food_handoff_vision.example.json config/food_handoff_vision.json
 ```
 
-Then edit:
+Edit:
 
 - `config/food_policies.json` with the Strawberry, Oreo, and Marshmallow policy
-  repo ids.
+  repo ids and any per-target OOD detector paths.
 - `config/food_handoff_vision.json` with the actual hand ROI, success ROI, and
   color thresholds for the camera setup.
 - `.env` with ElevenLabs credentials.
 
-Run with voice and STT enabled:
+Run the same flow against the robot by removing `--test-mode`:
 
 ```bash
 ./scripts/run_food_handoff.sh
 ```
 
-Run without speaker output:
+Useful robot-mode variants:
 
 ```bash
 ./scripts/run_food_handoff.sh --no-voice
+./scripts/run_food_handoff.sh --no-voice --no-stt --target strawberry
 ```
 
-Run a selected target without STT:
+## Smoke Tests
+
+Run unit tests:
 
 ```bash
-./scripts/run_food_handoff.sh --no-voice --no-stt --target strawberry
+uv run python -m unittest discover -s tests
+```
+
+Check TTS and laptop speaker output:
+
+```bash
+python3 eleven_labs_test.py
+```
+
+Check a recorded request clip through STT and target classification:
+
+```bash
+python3 eleven_labs_stt_test.py recordings/voice_requests/strawberry_request.wav
+```
+
+Replay transcript classification, STT fixtures, and vision success fixtures:
+
+```bash
+uv run python scripts/replay_handoff_mock.py --use-stt
+```
+
+To extract fixture frames from the Hugging Face Strawberry dataset:
+
+```bash
+uv run python scripts/extract_handoff_fixtures.py \
+  --download \
+  --repo-id ofcourseistillloveyou/so101_recording_strawberry_num40_20260516_161110
 ```
 
 ## OOD Policy Wrapper
