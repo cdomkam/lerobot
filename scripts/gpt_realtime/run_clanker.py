@@ -57,14 +57,14 @@ If the user says marshmallow, use target "marshmellow" because that is the robot
 If the request is ambiguous, ask a short clarifying question instead of calling a policy.
 If the user asks for anything outside strawberry, marshmellow, or oreo, politely explain that
 your tray is tragically limited to those three delicacies.
-The run_food_policy tool returns one of four statuses: already_running means a policy
-is already active, error means the policy errored while starting or running, success
-means the item was delivered, and failure means the item was not delivered.
+The run_food_policy tool returns status success, failure, or error. Error means the
+policy shell script failed to start or exited nonzero. Success means the policy shell
+script completed with exit code 0. Failure is reserved for future delivery-quality
+checks once they exist.
 While the tool call is pending, the microphone is muted; do not ask the user follow-up
 questions until the tool result returns. After success, say only the success_message
-from the tool if present. If already_running, briefly say the robot is already on an
-errand. If error or failure, briefly apologise and name the problem. Do not keep
-talking after that unless the user speaks again.
+from the tool if present. If error or failure, briefly apologise and name the problem.
+Do not keep talking after that unless the user speaks again.
 """
 
 SUCCESS_PUNS = {
@@ -262,6 +262,7 @@ class PolicyRunner:
         self.configs = configs
         self.dry_run = dry_run
         self.dry_run_seconds = max(0.0, dry_run_seconds)
+        self.run_lock = threading.Lock()
         self.lock = threading.Lock()
         self.active: ActivePolicyRun | None = None
         self.stop_requested = threading.Event()
@@ -274,54 +275,51 @@ class PolicyRunner:
         env.update(config.env)
         env.setdefault("RUN_ID", f"gpt_realtime_{target}_{time.strftime('%Y%m%d_%H%M%S')}")
 
-        with self.lock:
-            if self._is_running_locked():
-                assert self.active is not None
-                return self._already_running_result(target)
+        with self.run_lock:
+            with self.lock:
+                if self.dry_run:
+                    self.active = ActivePolicyRun(
+                        target=target,
+                        started_at=time.monotonic(),
+                        kind="dry_run",
+                        thread=threading.current_thread(),
+                    )
+                    self.stop_requested.clear()
+                    active = self.active
+                else:
+                    if not POLICY_SCRIPT.is_file():
+                        return {
+                            "status": "error",
+                            "ok": False,
+                            "target": target,
+                            "error": f"policy runner not found: {POLICY_SCRIPT}",
+                        }
+
+                    try:
+                        process = subprocess.Popen(command, cwd=ROOT_DIR, env=env)
+                    except Exception as exc:
+                        return {
+                            "status": "error",
+                            "ok": False,
+                            "target": target,
+                            "error": str(exc),
+                            "policy_repo_id": config.env["POLICY_REPO_ID"],
+                            "task": config.env["TASK"],
+                        }
+
+                    self.active = ActivePolicyRun(
+                        target=target,
+                        started_at=time.monotonic(),
+                        kind="robot",
+                        process=process,
+                        thread=threading.current_thread(),
+                    )
+                    self.stop_requested.clear()
+                    active = self.active
 
             if self.dry_run:
-                self.active = ActivePolicyRun(
-                    target=target,
-                    started_at=time.monotonic(),
-                    kind="dry_run",
-                    thread=threading.current_thread(),
-                )
-                self.stop_requested.clear()
-                active = self.active
-            else:
-                if not POLICY_SCRIPT.is_file():
-                    return {
-                        "status": "error",
-                        "ok": False,
-                        "target": target,
-                        "error": f"policy runner not found: {POLICY_SCRIPT}",
-                    }
-
-                try:
-                    process = subprocess.Popen(command, cwd=ROOT_DIR, env=env)
-                except Exception as exc:
-                    return {
-                        "status": "error",
-                        "ok": False,
-                        "target": target,
-                        "error": str(exc),
-                        "policy_repo_id": config.env["POLICY_REPO_ID"],
-                        "task": config.env["TASK"],
-                    }
-
-                self.active = ActivePolicyRun(
-                    target=target,
-                    started_at=time.monotonic(),
-                    kind="robot",
-                    process=process,
-                    thread=threading.current_thread(),
-                )
-                self.stop_requested.clear()
-                active = self.active
-
-        if self.dry_run:
-            return self._run_fake_policy(active, config, command)
-        return self._wait_for_policy(active, config, command)
+                return self._run_fake_policy(active, config, command)
+            return self._wait_for_policy(active, config, command)
 
     def stop_active(self) -> None:
         with self.lock:
@@ -385,7 +383,15 @@ class PolicyRunner:
         )
         self._clear_active(active)
         # TODO: Replace this optimistic result with real delivery success/failure
-        # detection and runtime error classification for the robot policy thread.
+        # detection once available. For now, the shell script exit code is the
+        # only source of truth: 0 => success, nonzero => error.
+        if exit_code != 0:
+            return self._error_result(
+                active.target,
+                config,
+                f"policy shell script exited with code {exit_code}",
+                exit_code=exit_code,
+            )
         return self._success_result(
             active.target,
             config,
@@ -399,28 +405,6 @@ class PolicyRunner:
         with self.lock:
             if self.active is active:
                 self.active = None
-
-    def _is_running_locked(self) -> bool:
-        if self.active is None:
-            return False
-        if self.active.process is not None and self.active.process.poll() is None:
-            return True
-        if self.active.process is None and self.active.thread is not None:
-            if self.active.thread.is_alive():
-                return True
-        self.active = None
-        return False
-
-    def _already_running_result(self, requested_target: str) -> dict[str, Any]:
-        assert self.active is not None
-        return {
-            "status": "already_running",
-            "ok": False,
-            "requested_target": requested_target,
-            "active_target": self.active.target,
-            "active_kind": self.active.kind,
-            "active_elapsed_s": round(time.monotonic() - self.active.started_at, 2),
-        }
 
     def _success_result(
         self,
@@ -458,6 +442,25 @@ class PolicyRunner:
             "policy_repo_id": config.env["POLICY_REPO_ID"],
             "task": config.env["TASK"],
         }
+
+    def _error_result(
+        self,
+        target: str,
+        config: PolicyConfig,
+        error: str,
+        exit_code: int | None = None,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "status": "error",
+            "ok": False,
+            "target": target,
+            "error": error,
+            "policy_repo_id": config.env["POLICY_REPO_ID"],
+            "task": config.env["TASK"],
+        }
+        if exit_code is not None:
+            result["exit_code"] = exit_code
+        return result
 
 
 def success_message(target: str) -> str:
@@ -911,8 +914,7 @@ class RealtimeClanker:
                     "name": "run_food_policy",
                     "description": (
                         "Run exactly one local SO-101 ACT policy to pick up a requested snack "
-                        "and put it in the user's hand. Returns status already_running, "
-                        "error, success, or failure."
+                        "and put it in the user's hand. Returns status success, failure, or error."
                     ),
                     "parameters": {
                         "type": "object",
