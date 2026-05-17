@@ -3,17 +3,16 @@
 This branch contains the SO-101 helpers plus a voice-gated food handoff flow for
 Strawberry, Oreo, and Marshmallow policies.
 
-The handoff loop is the same in mock mode and robot mode:
+The production handoff loop is ChatGPT Realtime driven:
 
-1. Wait for a hand in the scene camera frame.
-2. Record a short user request.
-3. Transcribe with ElevenLabs STT and classify the target policy.
-4. Run the selected food handoff policy.
-5. Score OOD from camera frames while the policy runs.
-6. Detect placement success from the scene camera.
-7. Optionally confirm success with OpenAI vision.
-8. Speak the outcome with ElevenLabs TTS.
-9. Pause so the hand can leave the frame, then repeat.
+1. ChatGPT Realtime listens to the microphone, transcribes the user request,
+   and decides when to call the `run_handoff` tool.
+2. The deterministic handoff control loop waits for a hand in the scene camera
+   frame, runs the selected policy, and checks success.
+3. GPT-5.4-nano vision checks side-camera success on background threads while
+   the policy runs.
+4. All spoken robot responses use the existing ElevenLabs TTS flow and phrase
+   inventories.
 
 The normal robot path uses a local OpenCV detector for hand entry. When OpenAI
 success confirmation is enabled, side-camera success checks run during the
@@ -22,40 +21,53 @@ success detector misses it.
 
 ## Production Run
 
-The default production run is a continuous, voice-driven, multi-policy robot
-loop:
+The default production run is a continuous ChatGPT Realtime orchestrated,
+multi-policy robot loop:
 
 ```bash
-./scripts/run_food_handoff.sh
+./scripts/run_realtime_food_handoff.sh
 ```
 
-Each cycle waits for a hand, records a voice request, classifies the requested
-food, loads that food's configured policy, runs the handoff, speaks the outcome,
-pauses for hand reset, and then returns to listening. Do not pass `--target` in
-production; `--target` is only a debug override and forces the same policy every
-cycle.
+ChatGPT Realtime listens and calls `run_handoff(target)` when the user requests
+Strawberry, Oreo, or Marshmallow. The tool runs one complete deterministic
+handoff cycle, including hand detection, ElevenLabs fetching/success speech,
+policy execution, side-camera success checks, and reset.
 
 OpenAI success confirmation is enabled by default in production. To disable it
 for a debug run:
 
 ```bash
-OPENAI_SUCCESS_ENABLED=false ./scripts/run_food_handoff.sh
+OPENAI_SUCCESS_ENABLED=false ./scripts/run_realtime_food_handoff.sh
 ```
+
+## Core Run Paths
+
+- **Robot, production:** `./scripts/run_realtime_food_handoff.sh`
+  listens with ChatGPT Realtime, uses the `run_handoff` tool, runs the robot
+  handoff loop, checks success with GPT-5.4-nano, and speaks through ElevenLabs.
+- **Robot, lower-level debug:** `./scripts/run_food_handoff.sh --no-stt --target strawberry --max-cycles 1`
+  bypasses Realtime and forces one food for one robot cycle.
+- **No robot, one recorded request:** `./scripts/run_food_handoff.sh --test-mode --test-audio recordings/voice_requests/strawberry_request.wav --max-cycles 1`
+  exercises request classification, policy selection, mocked policy/success, and
+  ElevenLabs output without connecting to SO-101.
+- **Realtime tool dry run:** `python3 scripts/gpt_realtime/run_clanker.py --dry-run-tool strawberry`
+  validates Realtime tool config and target normalization without opening the
+  websocket or touching the robot.
 
 ## Full Loop
 
-The runtime is `scripts/run_food_handoff.sh`, which launches
-`scripts/run_food_handoff.py`.
+The runtime is `scripts/run_realtime_food_handoff.sh`, which launches the
+Realtime orchestrator in `scripts/gpt_realtime/run_clanker.py`. The Realtime
+tool calls `scripts/run_food_handoff.sh --no-stt --target <food> --max-cycles 1`
+for the actual robot cycle.
 
 - **Hand gate:** `config/food_handoff_vision.json` watches named camera `side`
   from the LeRobot observation and uses the configured `hand.roi`. It builds a
   short empty-scene baseline, then triggers when enough pixels in that ROI
   change for enough consecutive frames.
-- **Speech request:** the runner records a short microphone clip, sends it to
-  ElevenLabs STT, and classifies the transcript as `strawberry`, `oreo`, or
-  `marshmallow`. After classification, ElevenLabs TTS speaks a randomized
-  British-style fetching phrase for the requested food. Debug runs can bypass
-  speech input with `--no-stt --target strawberry`.
+- **Speech request:** ChatGPT Realtime transcribes the microphone stream and
+  chooses the target through a `run_handoff` tool call. Realtime text output is
+  spoken locally through ElevenLabs; Realtime audio output is not used.
 - **Policy selection:** `config/food_policies.json` maps the classified food to
   a Hugging Face policy repo, task prompt, and per-target OOD detector.
 - **Policy execution:** the selected LeRobot policy runs on SO-101 for
@@ -91,15 +103,14 @@ ELEVENLABS_VOICE_ID=...
 ELEVENLABS_MODEL_ID=eleven_v3
 ```
 
-There is no separate STT model setting. `ELEVENLABS_MODEL_ID` configures
-text-to-speech output. Speech-to-text uses ElevenLabs `scribe_v2` internally,
-because the STT endpoint accepts Scribe models rather than TTS models such as
-`eleven_v3`.
+`ELEVENLABS_MODEL_ID` configures text-to-speech output. Production speech input
+uses ChatGPT Realtime rather than ElevenLabs STT.
 
 OpenAI success confirmation uses the same `.env` file:
 
 ```bash
 OAI_KEY=...
+OPENAI_REALTIME_MODEL=gpt-realtime-2
 OPENAI_VISION_MODEL=gpt-5.4-nano
 OPENAI_SUCCESS_MIN_CONFIDENCE=0.70
 ```
@@ -115,17 +126,17 @@ For robot execution, this branch expects a latest LeRobot checkout at
 
 ## Test Views
 
-Use these four views for normal testing. In all cases, speech input and
-ElevenLabs speech output are enabled by default. Unless you pass the debug-only
-`--target` override, every cycle listens to the user's voice request and can
-select any configured food policy.
+Use these four views for normal testing. Realtime robot runs listen through
+ChatGPT Realtime and speak through ElevenLabs. Lower-level mock runs use recorded
+clips and the deterministic handoff runner directly.
 
 ### 1. Test One Voice Request, No Robot
 
-Use `--test-mode` with a recorded request clip. This does not connect to SO-101,
-does not load LeRobot rollout code, and does not require policy checkpoints or
-OOD detector files. It still exercises ElevenLabs STT, target classification,
-policy selection, mocked success/OOD handling, and ElevenLabs TTS.
+Use lower-level `--test-mode` with a recorded request clip. This does not
+connect to SO-101, does not load LeRobot rollout code, and does not require
+policy checkpoints or OOD detector files. It still exercises recorded speech
+classification, policy selection, mocked success/OOD handling, and ElevenLabs
+TTS.
 
 Strawberry:
 
@@ -168,22 +179,18 @@ Preconfiguration:
   gates: `hand.camera_name=side` and `success.camera_name=side`.
 - Keep one hand near power/USB for the first robot run.
 
-Run one robot cycle and say any configured food, for example "strawberry",
-during the request recording window:
+Run the Realtime robot loop and ask for any configured food, for example
+"strawberry". Stop after the cycle with Enter or Ctrl-C:
 
 ```bash
-./scripts/run_food_handoff.sh \
-  --max-cycles 1 \
-  --reset-pause-s 5
+./scripts/run_realtime_food_handoff.sh
 ```
 
 Disable OpenAI success confirmation for a debug run:
 
 ```bash
 OPENAI_SUCCESS_ENABLED=false \
-./scripts/run_food_handoff.sh \
-  --max-cycles 1 \
-  --reset-pause-s 5
+./scripts/run_realtime_food_handoff.sh
 ```
 
 ### 3. Test A Set Of Voice Requests, No Robot
@@ -223,37 +230,34 @@ Preconfiguration is the same as the single-cycle robot test: every food the user
 might request must have a valid policy repo id and local OOD detector in
 `config/food_policies.json`.
 
-Run two robot cycles and request Strawberry during the first cycle, then
-Marshmallow during the second cycle:
+Run the Realtime robot loop and request Strawberry during one tool call, then
+Marshmallow during the next:
 
 ```bash
-./scripts/run_food_handoff.sh \
-  --max-cycles 2 \
-  --reset-pause-s 5
+./scripts/run_realtime_food_handoff.sh
 ```
 
 Disable OpenAI success confirmation for a debug run:
 
 ```bash
 OPENAI_SUCCESS_ENABLED=false \
-./scripts/run_food_handoff.sh \
-  --max-cycles 2 \
-  --reset-pause-s 5
+./scripts/run_realtime_food_handoff.sh
 ```
 
 The production robot loop is the same command without `--max-cycles`; stop it
 with Ctrl-C:
 
 ```bash
-./scripts/run_food_handoff.sh
+./scripts/run_realtime_food_handoff.sh
 ```
 
 Expected successful logs include:
 
 ```text
+[user] Please put the strawberry in my hand
+[handoff] Started strawberry: ...
 [CYCLE] start cycle=1
 [HAND] present
-[REQUEST] transcript='Please put the strawberry in my hand' target=strawberry
 [REQUEST] target=strawberry policy=...
 [TTS] queue wait=True phrase='...Strawberry...'
 [POLICY] starting target=strawberry ...
@@ -261,11 +265,12 @@ Expected successful logs include:
 [TASK_SUCCESS] target=strawberry frame=... source=openai opencv_score=...
 [TTS] queue wait=True phrase='...Strawberry...'
 [CYCLE] complete cycle=1 outcome=success
+[handoff] Finished strawberry exit_code=0 ...
 ```
 
-Debug-only override: `--no-stt --target strawberry` bypasses microphone/STT and
-forces one target for every cycle. The normal path uses speech input and output,
-and each cycle chooses its policy from the user's request.
+Lower-level debug override: `./scripts/run_food_handoff.sh --no-stt --target
+strawberry --max-cycles 1` bypasses Realtime and forces one target. The normal
+path uses Realtime speech input/tool orchestration and ElevenLabs speech output.
 
 Useful robot-mode environment knobs:
 

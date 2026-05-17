@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import time
+from pathlib import Path
 
 from lerobot_ood import (
     ElevenLabsTTSWorker,
@@ -33,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--max-cycles", type=int, default=1)
     parser.add_argument("--reset-pause-s", type=float, default=7.0)
+    parser.add_argument("--result-json-path", default="")
     parser.add_argument("--test-policy-steps", type=int, default=5)
     parser.add_argument("--test-success-after-steps", type=int, default=3)
     return parser.parse_args()
@@ -49,6 +52,7 @@ def main() -> None:
         raise ValueError("--reset-pause-s must be >= 0")
 
     policy_config = load_food_policy_config(args.food_policy_config)
+    cycle_results = []
 
     tts_worker = None
     if tts_enabled:
@@ -102,6 +106,15 @@ def main() -> None:
                     logger.warning("[REQUEST] could not classify target")
                     speak(tts_worker, choose_food_handoff_ood_phrase(), wait=True)
                     logger.info("[CYCLE] complete cycle=%d outcome=ood_unclassified", cycle)
+                    cycle_results.append(
+                        {
+                            "cycle": cycle,
+                            "target": target,
+                            "outcome": "ood_unclassified",
+                            "success": False,
+                        }
+                    )
+                    write_result_json(args.result_json_path, cycle_results)
                     reset_between_cycles(args, cycle)
                     continue
 
@@ -115,9 +128,22 @@ def main() -> None:
             speak(tts_worker, choose_fetching_phrase(selected_policy.display_name), wait=True)
             outcome = run_mock_policy_cycle(args, selected_policy, tts_worker)
             logger.info("[CYCLE] complete cycle=%d outcome=%s", cycle, outcome)
+            cycle_results.append(
+                {
+                    "cycle": cycle,
+                    "target": selected_policy.target,
+                    "display_name": selected_policy.display_name,
+                    "policy_repo_id": selected_policy.policy_repo_id,
+                    "task": selected_policy.task,
+                    "outcome": outcome,
+                    "success": outcome == "success",
+                }
+            )
+            write_result_json(args.result_json_path, cycle_results)
             reset_between_cycles(args, cycle)
     finally:
         close_tts(tts_worker)
+        write_result_json(args.result_json_path, cycle_results)
         logger.info("Mocked handoff loop stopped after %d cycle(s)", cycle)
 
 
@@ -142,6 +168,17 @@ def speak(worker: ElevenLabsTTSWorker | None, phrase: str, wait: bool = False) -
 def close_tts(worker: ElevenLabsTTSWorker | None) -> None:
     if worker is not None:
         worker.close(timeout=10.0)
+
+
+def write_result_json(path: str, cycle_results: list[dict]) -> None:
+    if not path:
+        return
+    payload = {
+        "status": cycle_results[-1]["outcome"] if cycle_results else "not_started",
+        "success": bool(cycle_results and cycle_results[-1]["success"]),
+        "cycles": cycle_results,
+    }
+    Path(path).write_text(json.dumps(payload, indent=2))
 
 
 def reset_between_cycles(args: argparse.Namespace, cycle: int) -> None:

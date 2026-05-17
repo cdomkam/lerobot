@@ -1,10 +1,11 @@
 #!/usr/bin/env python
-"""Realtime speech-to-speech butler that dispatches ACT food policies."""
+"""Realtime speech-to-tool butler that dispatches full food handoff cycles."""
 
 from __future__ import annotations
 
 import argparse
 import base64
+import importlib.util
 import json
 import math
 import os
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,9 +28,10 @@ DEFAULT_DRY_RUN_SECONDS = 15.0
 ELEVATOR_MUSIC_SAMPLE_RATE = 16_000
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parents[1]
-POLICY_SCRIPT = ROOT_DIR / "scripts" / "run_policy_on_robot.sh"
+HANDOFF_SCRIPT = ROOT_DIR / "scripts" / "run_food_handoff.sh"
 DEFAULT_ENV_FILE = ROOT_DIR / ".env"
 DEFAULT_ELEVATOR_MUSIC_PATH = SCRIPT_DIR / "assets" / "elevator_music.mp3"
+DEFAULT_FOOD_POLICY_CONFIG = ROOT_DIR / "config" / "food_policies.json"
 TARGET_ALIASES = {
     "strawberry": "strawberry",
     "strawberries": "strawberry",
@@ -36,64 +39,53 @@ TARGET_ALIASES = {
     "oreos": "oreo",
     "cookie": "oreo",
     "cookies": "oreo",
-    "marshmallow": "marshmellow",
-    "marshmallows": "marshmellow",
-    "marshmellow": "marshmellow",
-    "marshmellows": "marshmellow",
+    "marshmallow": "marshmallow",
+    "marshmallows": "marshmallow",
+    "marshmellow": "marshmallow",
+    "marshmellows": "marshmallow",
 }
+
+_TTS_SPEC = importlib.util.spec_from_file_location(
+    "realtime_handoff_tts",
+    ROOT_DIR / "src" / "lerobot_ood" / "tts.py",
+)
+if _TTS_SPEC is None or _TTS_SPEC.loader is None:
+    raise RuntimeError("Could not load lerobot_ood.tts")
+_tts = importlib.util.module_from_spec(_TTS_SPEC)
+sys.modules[_TTS_SPEC.name] = _tts
+_TTS_SPEC.loader.exec_module(_tts)
+ElevenLabsTTSWorker = _tts.ElevenLabsTTSWorker
+load_elevenlabs_tts_config = _tts.load_elevenlabs_tts_config
 
 SYSTEM_PROMPT = """\
-You are Alfred, a polite, funny robot butler with an unmistakably British butler accent
-and a warm masculine presentation. Sound posh, dry, crisp, and distinctly British in
-every reply, like a cheerful household valet from a London manor. Use British phrasing
-such as "very good", "right you are", "splendid", "I say", "rather", and "shall".
-Your job is to deliver exactly one snack to the user: a strawberry, marshmellow, or oreo.
+You are Alfred, a polite, funny robot butler. You listen to the user and orchestrate
+exactly one snack handoff at a time for strawberry, marshmallow, or oreo.
 
-Be extremely concise. Most replies should be one sentence, never more than two short
-sentences. Do not monologue, narrate your reasoning, explain the system, or chat
-unprompted. Make at most one small dry joke per reply.
-When the user asks for one of the three snacks, call run_food_policy with that target.
-If the user says marshmallow, use target "marshmellow" because that is the robot policy name.
-If the request is ambiguous, ask a short clarifying question instead of calling a policy.
-If the user asks for anything outside strawberry, marshmellow, or oreo, politely explain that
-your tray is tragically limited to those three delicacies.
-The run_food_policy tool returns status success, failure, or error. Error means the
-policy shell script failed to start or exited nonzero. Success means the policy shell
-script completed with exit code 0. Failure is reserved for future delivery-quality
-checks once they exist.
-While the tool call is pending, the microphone is muted; do not ask the user follow-up
-questions until the tool result returns. After success, say only the success_message
-from the tool if present. If error or failure, briefly apologise and name the problem.
-Do not keep talking after that unless the user speaks again.
+You do not produce audio yourself. Any text you emit is converted to speech locally
+with ElevenLabs, so keep replies crisp and suitable for speaking aloud. Use British
+phrasing such as "very good", "right you are", "splendid", "I say", and "shall".
+
+When the user clearly asks for one of the three snacks, call run_handoff with that
+target. If the request is ambiguous, ask a short clarifying question instead of
+calling the tool. If the user asks for anything outside strawberry, marshmallow, or
+oreo, politely explain that your tray is limited to those three delicacies.
+
+The run_handoff tool waits for the hand, speaks the fetching line through ElevenLabs,
+runs the robot policy, checks side-camera success using GPT-5.4-nano in the background,
+speaks the final success phrase through ElevenLabs, and returns structured status.
+While the tool call is pending, the microphone is muted. After a successful tool
+result, remain silent because the control loop has already spoken the outcome.
+If the tool returns failure or error, briefly apologise and name the problem.
 """
-
-SUCCESS_PUNS = {
-    "marshmellow": (
-        "Marshmallow delivery complete. I hope this softens your day.",
-        "Here is your marshmallow. Resistance is fluff-tile.",
-        "Soft payload acquired. Enjoy the fluffware.",
-        "Handing over one marshmallow. It's a soft launch.",
-    ),
-    "strawberry": (
-        "Strawberry delivery complete. You are berry welcome.",
-        "This is a berry important package.",
-        "Strawberry acquired. Seed data confirms deliciousness.",
-        "Handing over strawberry. My work here is berry done.",
-    ),
-    "oreo": (
-        "Oreo delivery complete. That's the way the cookie computes.",
-        "Here is your Oreo. It was stored in my cookie cache.",
-        "Oreo acquired. Twist protocol optional.",
-        "Cookie transfer complete. Crumb risk detected.",
-    ),
-}
 
 
 @dataclass(frozen=True)
 class PolicyConfig:
     target: str
     path: Path
-    env: dict[str, str]
+    display_name: str
+    policy_repo_id: str
+    task: str
 
 
 @dataclass
@@ -202,35 +194,34 @@ def canonical_target(value: str) -> str:
     normalized = "".join(ch for ch in value.lower() if ch.isalnum())
     target = TARGET_ALIASES.get(normalized)
     if target is None:
-        expected = ", ".join(sorted({"strawberry", "marshmellow", "oreo"}))
+        expected = ", ".join(sorted({"strawberry", "marshmallow", "oreo"}))
         raise ValueError(f"unknown food target {value!r}; expected one of: {expected}")
     return target
 
 
-def env_value(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
-
-
-def load_policy_configs(config_dir: Path) -> dict[str, PolicyConfig]:
+def load_policy_configs(config_path: Path) -> dict[str, PolicyConfig]:
+    if not config_path.is_file():
+        raise FileNotFoundError(f"missing food policy config: {config_path}")
+    raw = json.loads(config_path.read_text())
+    targets = raw.get("targets", {})
+    if not isinstance(targets, dict):
+        raise ValueError(f"{config_path} must contain a targets object")
     configs: dict[str, PolicyConfig] = {}
-    for target in ("strawberry", "marshmellow", "oreo"):
-        path = config_dir / f"{target}.json"
-        if not path.is_file():
-            raise FileNotFoundError(f"missing policy config: {path}")
-        raw = json.loads(path.read_text())
-        if not isinstance(raw, dict):
-            raise ValueError(f"{path} must contain a JSON object of environment variables")
-        env = {str(key): env_value(value) for key, value in raw.items()}
-        missing = [
-            key
-            for key in ("POLICY_REPO_ID", "POLICY_CHUNK_SIZE", "POLICY_N_ACTION_STEPS", "TASK")
-            if not env.get(key)
-        ]
-        if missing:
-            raise ValueError(f"{path} is missing required env var(s): {', '.join(missing)}")
-        configs[target] = PolicyConfig(target=target, path=path, env=env)
+    for target in ("strawberry", "oreo", "marshmallow"):
+        values = targets.get(target)
+        if not isinstance(values, dict):
+            raise ValueError(f"{config_path} is missing target {target!r}")
+        policy_repo_id = str(values.get("policy_repo_id", "")).strip()
+        task = str(values.get("task", "")).strip()
+        if not policy_repo_id or not task:
+            raise ValueError(f"{config_path} target {target!r} needs policy_repo_id and task")
+        configs[target] = PolicyConfig(
+            target=target,
+            path=config_path,
+            display_name=str(values.get("display_name", target.title())).strip() or target.title(),
+            policy_repo_id=policy_repo_id,
+            task=task,
+        )
     return configs
 
 
@@ -270,12 +261,23 @@ class PolicyRunner:
     def run(self, target_value: str) -> dict[str, Any]:
         target = canonical_target(target_value)
         config = self.configs[target]
-        command = [str(POLICY_SCRIPT)]
+        command = [
+            str(HANDOFF_SCRIPT),
+            "--no-stt",
+            "--target",
+            target,
+            "--max-cycles",
+            "1",
+            "--reset-pause-s",
+            "0",
+        ]
         env = os.environ.copy()
-        env.update(config.env)
         env.setdefault("RUN_ID", f"gpt_realtime_{target}_{time.strftime('%Y%m%d_%H%M%S')}")
+        env.setdefault("OPENAI_SUCCESS_ENABLED", "true")
+        env.setdefault("STT_ENABLED", "false")
 
         with self.run_lock:
+            result_path = None
             with self.lock:
                 if self.dry_run:
                     self.active = ActivePolicyRun(
@@ -287,24 +289,36 @@ class PolicyRunner:
                     self.stop_requested.clear()
                     active = self.active
                 else:
-                    if not POLICY_SCRIPT.is_file():
+                    if not HANDOFF_SCRIPT.is_file():
                         return {
                             "status": "error",
                             "ok": False,
                             "target": target,
-                            "error": f"policy runner not found: {POLICY_SCRIPT}",
+                            "error": f"handoff runner not found: {HANDOFF_SCRIPT}",
                         }
 
+                    result_file = tempfile.NamedTemporaryFile(
+                        prefix=f"realtime_handoff_{target}_",
+                        suffix=".json",
+                        delete=False,
+                    )
+                    result_path = Path(result_file.name)
+                    result_file.close()
+                    env["RESULT_JSON_PATH"] = str(result_path)
                     try:
                         process = subprocess.Popen(command, cwd=ROOT_DIR, env=env)
                     except Exception as exc:
+                        try:
+                            result_path.unlink()
+                        except FileNotFoundError:
+                            pass
                         return {
                             "status": "error",
                             "ok": False,
                             "target": target,
                             "error": str(exc),
-                            "policy_repo_id": config.env["POLICY_REPO_ID"],
-                            "task": config.env["TASK"],
+                            "policy_repo_id": config.policy_repo_id,
+                            "task": config.task,
                         }
 
                     self.active = ActivePolicyRun(
@@ -319,7 +333,8 @@ class PolicyRunner:
 
             if self.dry_run:
                 return self._run_fake_policy(active, config, command)
-            return self._wait_for_policy(active, config, command)
+            assert result_path is not None
+            return self._wait_for_handoff(active, config, command, result_path)
 
     def stop_active(self) -> None:
         with self.lock:
@@ -329,7 +344,7 @@ class PolicyRunner:
         self.stop_requested.set()
         process = active.process
         if process is not None and process.poll() is None:
-            print(f"[policy] Stopping active {active.target} policy...", flush=True)
+            print(f"[handoff] Stopping active {active.target} handoff...", flush=True)
             process.terminate()
             try:
                 process.wait(timeout=5.0)
@@ -349,8 +364,8 @@ class PolicyRunner:
         command: list[str],
     ) -> dict[str, Any]:
         print(
-            f"\n[policy] Dry run started {active.target}: "
-            f"pretending to run {config.env['POLICY_REPO_ID']} for {self.dry_run_seconds:.1f}s",
+            f"\n[handoff] Dry run started {active.target}: "
+            f"pretending to run {config.policy_repo_id} for {self.dry_run_seconds:.1f}s",
             flush=True,
         )
         deadline = time.monotonic() + self.dry_run_seconds
@@ -359,44 +374,54 @@ class PolicyRunner:
             if self.stop_requested.wait(timeout=min(0.25, remaining)):
                 break
         if self.stop_requested.is_set():
-            print(f"[policy] Dry run stopped {active.target}", flush=True)
+            print(f"[handoff] Dry run stopped {active.target}", flush=True)
             result = self._failure_result(active.target, config, "dry run stopped before completion")
         else:
-            print(f"[policy] Dry run finished {active.target}", flush=True)
+            print(f"[handoff] Dry run finished {active.target}", flush=True)
             result = self._success_result(active.target, config, command, dry_run=True)
         self._clear_active(active)
         return result
 
-    def _wait_for_policy(
+    def _wait_for_handoff(
         self,
         active: ActivePolicyRun,
         config: PolicyConfig,
         command: list[str],
+        result_path: Path,
     ) -> dict[str, Any]:
         assert active.process is not None
-        print(f"\n[policy] Started {active.target}: {config.env['POLICY_REPO_ID']}", flush=True)
+        print(f"\n[handoff] Started {active.target}: {config.policy_repo_id}", flush=True)
         exit_code = active.process.wait()
         print(
-            f"[policy] Finished {active.target} exit_code={exit_code} "
-            f"repo={config.env['POLICY_REPO_ID']}",
+            f"[handoff] Finished {active.target} exit_code={exit_code} "
+            f"repo={config.policy_repo_id}",
             flush=True,
         )
         self._clear_active(active)
-        # TODO: Replace this optimistic result with real delivery success/failure
-        # detection once available. For now, the shell script exit code is the
-        # only source of truth: 0 => success, nonzero => error.
+        try:
+            payload = json.loads(result_path.read_text()) if result_path.is_file() else {}
+        except Exception as exc:
+            payload = {"status": "error", "success": False, "error": f"invalid result json: {exc}"}
+        finally:
+            try:
+                result_path.unlink()
+            except FileNotFoundError:
+                pass
+
         if exit_code != 0:
-            return self._error_result(
+            result = self._error_result(
                 active.target,
                 config,
-                f"policy shell script exited with code {exit_code}",
+                f"handoff runner exited with code {exit_code}",
                 exit_code=exit_code,
             )
-        return self._success_result(
+            result["handoff_result"] = payload
+            return result
+        return self._result_from_handoff_payload(
             active.target,
             config,
             command,
-            dry_run=False,
+            payload,
             pid=active.process.pid,
             exit_code=exit_code,
         )
@@ -419,10 +444,11 @@ class PolicyRunner:
             "status": "success",
             "ok": True,
             "target": target,
-            "success_message": success_message(target),
+            "success": True,
+            "spoken_by_control_loop": True,
             "dry_run": dry_run,
-            "policy_repo_id": config.env["POLICY_REPO_ID"],
-            "task": config.env["TASK"],
+            "policy_repo_id": config.policy_repo_id,
+            "task": config.task,
             "command": command,
         }
         if dry_run:
@@ -437,10 +463,11 @@ class PolicyRunner:
         return {
             "status": "failure",
             "ok": False,
+            "success": False,
             "target": target,
             "reason": reason,
-            "policy_repo_id": config.env["POLICY_REPO_ID"],
-            "task": config.env["TASK"],
+            "policy_repo_id": config.policy_repo_id,
+            "task": config.task,
         }
 
     def _error_result(
@@ -453,18 +480,50 @@ class PolicyRunner:
         result: dict[str, Any] = {
             "status": "error",
             "ok": False,
+            "success": False,
             "target": target,
             "error": error,
-            "policy_repo_id": config.env["POLICY_REPO_ID"],
-            "task": config.env["TASK"],
+            "policy_repo_id": config.policy_repo_id,
+            "task": config.task,
         }
         if exit_code is not None:
             result["exit_code"] = exit_code
         return result
 
 
-def success_message(target: str) -> str:
-    return random.choice(SUCCESS_PUNS.get(target, (f"{target.title()} delivery complete.",)))
+    def _result_from_handoff_payload(
+        self,
+        target: str,
+        config: PolicyConfig,
+        command: list[str],
+        payload: dict[str, Any],
+        pid: int,
+        exit_code: int,
+    ) -> dict[str, Any]:
+        success = bool(payload.get("success"))
+        status = "success" if success else "failure"
+        result: dict[str, Any] = {
+            "status": status,
+            "ok": success,
+            "success": success,
+            "target": target,
+            "policy_repo_id": config.policy_repo_id,
+            "task": config.task,
+            "command": command,
+            "pid": pid,
+            "exit_code": exit_code,
+            "spoken_by_control_loop": True,
+            "handoff_result": payload,
+        }
+        cycles = payload.get("cycles")
+        if isinstance(cycles, list) and cycles:
+            last = cycles[-1]
+            result["outcome"] = last.get("outcome")
+            result["cycle"] = last.get("cycle")
+            result["reason"] = last.get("outcome")
+        else:
+            result["reason"] = payload.get("status", "missing_result")
+        return result
 
 
 class AudioIO:
@@ -486,7 +545,7 @@ class AudioIO:
             import sounddevice as sd
         except ImportError as exc:
             raise RuntimeError(
-                "run_clanker.py needs sounddevice for microphone and speaker audio. "
+                "run_clanker.py needs sounddevice for microphone audio. "
                 "Install project dependencies first with `uv sync`, or install sounddevice."
             ) from exc
 
@@ -497,17 +556,9 @@ class AudioIO:
             blocksize=1200,
             callback=self._on_input,
         )
-        self.output_stream = sd.RawOutputStream(
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype="int16",
-            blocksize=1200,
-        )
         self.input_stream.start()
-        self.output_stream.start()
         self.threads = [
             threading.Thread(target=self._input_sender, name="clanker-audio-input", daemon=True),
-            threading.Thread(target=self._output_player, name="clanker-audio-output", daemon=True),
         ]
         for thread in self.threads:
             thread.start()
@@ -601,6 +652,7 @@ class RealtimeClanker:
         model: str,
         voice: str,
         runner: PolicyRunner,
+        tts_worker,
         greeting: bool,
         barge_in: bool,
     ) -> None:
@@ -608,6 +660,7 @@ class RealtimeClanker:
         self.model = model
         self.voice = voice
         self.runner = runner
+        self.tts_worker = tts_worker
         self.greeting = greeting
         self.barge_in = barge_in
         self.stop_event = threading.Event()
@@ -662,6 +715,8 @@ class RealtimeClanker:
         self.elevator_music.stop()
         self.runner.stop_active()
         self.audio.close()
+        if self.tts_worker is not None:
+            self.tts_worker.close(timeout=10.0)
         if self.ws is not None:
             self.ws.close()
 
@@ -742,7 +797,7 @@ class RealtimeClanker:
         if not self.audio_started:
             self.audio.start()
             self.audio_started = True
-        print("[clanker] Listening. Ask Alfred for a strawberry, marshmellow, or oreo.", flush=True)
+        print("[clanker] Listening. Ask Alfred for a strawberry, marshmallow, or oreo.", flush=True)
         if self.greeting:
             self.send_event(
                 {
@@ -750,7 +805,7 @@ class RealtimeClanker:
                     "response": {
                         "instructions": (
                             "Greet the user as Alfred in one sentence and say you can fetch "
-                            "a strawberry, marshmellow, or oreo."
+                            "a strawberry, marshmallow, or oreo."
                         )
                     },
                 }
@@ -773,16 +828,17 @@ class RealtimeClanker:
             if transcript:
                 print(f"[user] {transcript}", flush=True)
         elif event_type in {"response.output_audio.delta", "response.audio.delta"}:
-            self.suppress_mic_for_playback()
-            item_id = str(event.get("item_id", ""))
-            if item_id:
-                self.current_audio_item_id = item_id
-                self.current_audio_content_index = int(event.get("content_index", 0))
-            self.audio.play(item_id, base64.b64decode(event.get("delta", "")))
+            # Production audio output is ElevenLabs-only. If Realtime ever emits
+            # audio despite the text-only session config, discard it.
+            pass
         elif event_type == "response.output_audio_transcript.done":
             transcript = event.get("transcript", "")
             if transcript:
                 print(f"[alfred] {transcript}", flush=True)
+        elif event_type in {"response.output_text.done", "response.text.done"}:
+            text = event.get("text") or event.get("content") or event.get("transcript") or ""
+            if text:
+                self.speak_text(str(text))
         elif event_type == "response.function_call_arguments.done":
             # The Realtime docs recommend acting on complete function calls in
             # response.done. This earlier event can arrive before the response
@@ -843,7 +899,7 @@ class RealtimeClanker:
         )
 
     def handle_function_call(self, name: str, call_id: str, arguments: str) -> None:
-        if name != "run_food_policy" or not call_id:
+        if name != "run_handoff" or not call_id:
             return
         with self.send_lock:
             if call_id in self.handled_call_ids:
@@ -856,6 +912,27 @@ class RealtimeClanker:
             name=f"clanker-tool-{call_id}",
             daemon=True,
         ).start()
+
+    def speak_text(self, text: str) -> None:
+        text = text.strip()
+        if not text:
+            return
+        print(f"[alfred] {text}", flush=True)
+        self.suppress_mic_for_text(text)
+        if self.tts_worker is None:
+            return
+        if not self.tts_worker.speak(text):
+            print("[tts] ElevenLabs queue full; dropping assistant text", file=sys.stderr)
+
+    def suppress_mic_for_text(self, text: str) -> None:
+        if self.barge_in:
+            return
+        estimated_s = max(2.0, min(8.0, len(text) / 12.0))
+        with self.playback_lock:
+            self.mic_suppressed_until = max(
+                self.mic_suppressed_until,
+                time.monotonic() + estimated_s,
+            )
 
     def _run_tool_and_respond(self, call_id: str, arguments: str) -> None:
         try:
@@ -884,7 +961,7 @@ class RealtimeClanker:
             "type": "realtime",
             "model": self.model,
             "instructions": SYSTEM_PROMPT,
-            "output_modalities": ["audio"],
+            "output_modalities": ["text"],
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
@@ -903,26 +980,24 @@ class RealtimeClanker:
                         "interrupt_response": self.barge_in,
                     },
                 },
-                "output": {
-                    "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
-                    "voice": self.voice,
-                },
             },
             "tools": [
                 {
                     "type": "function",
-                    "name": "run_food_policy",
+                    "name": "run_handoff",
                     "description": (
-                        "Run exactly one local SO-101 ACT policy to pick up a requested snack "
-                        "and put it in the user's hand. Returns status success, failure, or error."
+                        "Run exactly one local SO-101 food handoff cycle for the requested snack. "
+                        "The control loop waits for the hand, speaks status through ElevenLabs, "
+                        "runs the policy, checks side-camera success with GPT-5.4-nano, and returns "
+                        "structured success, failure, or error status."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "target": {
                                 "type": "string",
-                                "description": "The snack policy to run.",
-                                "enum": ["strawberry", "marshmellow", "oreo"],
+                                "description": "The snack handoff target to run.",
+                                "enum": ["strawberry", "marshmallow", "oreo"],
                             }
                         },
                         "required": ["target"],
@@ -947,11 +1022,18 @@ def api_key_from_env(env_name: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Alfred, the GPT Realtime snack butler.")
-    parser.add_argument("--config-dir", type=Path, default=SCRIPT_DIR)
+    parser.add_argument("--food-policy-config", type=Path, default=DEFAULT_FOOD_POLICY_CONFIG)
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     parser.add_argument("--model", default=os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2"))
     parser.add_argument("--voice", default=os.environ.get("OPENAI_REALTIME_VOICE", "ballad"))
     parser.add_argument("--api-key-env", default="OAI_KEY")
+    parser.add_argument("--tts-enabled", default=os.environ.get("OOD_TTS_ENABLED", "true"))
+    parser.add_argument("--tts-config-path", type=Path, default=DEFAULT_ENV_FILE)
+    parser.add_argument(
+        "--tts-queue-max",
+        type=int,
+        default=int(os.environ.get("OOD_TTS_QUEUE_MAX", "25")),
+    )
     barge_group = parser.add_mutually_exclusive_group()
     barge_group.add_argument(
         "--barge-in",
@@ -996,10 +1078,14 @@ def parse_env_file_arg(argv: list[str] | None) -> Path:
     return args.env_file
 
 
+def parse_bool(value: str) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(parse_env_file_arg(argv))
     args = build_parser().parse_args(argv)
-    configs = load_policy_configs(args.config_dir)
+    configs = load_policy_configs(args.food_policy_config)
     runner = PolicyRunner(
         configs,
         dry_run=args.dry_run_policy,
@@ -1008,7 +1094,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list_policies:
         for target, config in configs.items():
-            print(f"{target}: {config.env['POLICY_REPO_ID']} ({config.path})")
+            print(f"{target}: {config.policy_repo_id} ({config.path})")
         return 0
 
     if args.dry_run_tool:
@@ -1019,18 +1105,38 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "status": "success",
                     "ok": True,
+                    "success": True,
                     "target": target,
-                    "success_message": success_message(target),
+                    "spoken_by_control_loop": True,
                     "dry_run": True,
                     "fake_process_seconds": 0.0,
-                    "policy_repo_id": config.env["POLICY_REPO_ID"],
-                    "task": config.env["TASK"],
-                    "command": [str(POLICY_SCRIPT)],
+                    "policy_repo_id": config.policy_repo_id,
+                    "task": config.task,
+                    "command": [
+                        str(HANDOFF_SCRIPT),
+                        "--no-stt",
+                        "--target",
+                        target,
+                        "--max-cycles",
+                        "1",
+                        "--reset-pause-s",
+                        "0",
+                    ],
                 },
                 indent=2,
             )
         )
         return 0
+
+    tts_worker = None
+    if parse_bool(args.tts_enabled):
+        tts_config = load_elevenlabs_tts_config(args.tts_config_path)
+        tts_worker = ElevenLabsTTSWorker(tts_config, max_queue_size=args.tts_queue_max)
+        tts_worker.start()
+        print(
+            f"[tts] ElevenLabs enabled voice_id={tts_config.voice_id} model_id={tts_config.model_id}",
+            flush=True,
+        )
 
     api_key = api_key_from_env(args.api_key_env)
     clanker = RealtimeClanker(
@@ -1038,6 +1144,7 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model,
         voice=args.voice,
         runner=runner,
+        tts_worker=tts_worker,
         greeting=args.greeting,
         barge_in=args.barge_in,
     )

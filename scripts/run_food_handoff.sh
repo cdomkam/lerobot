@@ -86,9 +86,10 @@ OOD_TTS_ENABLED="${OOD_TTS_ENABLED:-true}"
 OOD_TTS_CONFIG_PATH="${OOD_TTS_CONFIG_PATH:-.env}"
 OOD_TTS_EVERY_N="${OOD_TTS_EVERY_N:-30}"
 OOD_TTS_QUEUE_MAX="${OOD_TTS_QUEUE_MAX:-25}"
-OPENAI_SUCCESS_ENABLED="${OPENAI_SUCCESS_ENABLED:-false}"
+OPENAI_SUCCESS_ENABLED="${OPENAI_SUCCESS_ENABLED:-true}"
 OPENAI_SUCCESS_CONFIG_PATH="${OPENAI_SUCCESS_CONFIG_PATH:-.env}"
 OPENAI_SUCCESS_EVERY_N="${OPENAI_SUCCESS_EVERY_N:-15}"
+RESULT_JSON_PATH="${RESULT_JSON_PATH:-}"
 STT_ENABLED="${STT_ENABLED:-true}"
 REQUEST_AUDIO_SECONDS="${REQUEST_AUDIO_SECONDS:-3}"
 REQUEST_AUDIO_SAMPLE_RATE="${REQUEST_AUDIO_SAMPLE_RATE:-16000}"
@@ -206,6 +207,7 @@ echo "Side camera:     index=${CAMERA_SIDE_INDEX} ${CAMERA_WIDTH}x${CAMERA_HEIGH
 echo "Max cycles:      ${MAX_CYCLES} (0=unlimited)"
 echo "Reset pause:     ${RESET_PAUSE_S}s"
 echo "Duration:        ${DURATION}s"
+echo "Result JSON:     ${RESULT_JSON_PATH:-none}"
 echo
 if [[ "${TEST_MODE}" == "true" ]]; then
   echo "Test mode uses mocked hand, policy, action, success, and OOD paths."
@@ -226,6 +228,7 @@ if [[ "${TEST_MODE}" == "true" ]]; then
     --fps="${FPS}" \
     --max-cycles="${MAX_CYCLES}" \
     --reset-pause-s="${RESET_PAUSE_S}" \
+    --result-json-path="${RESULT_JSON_PATH}" \
     --test-policy-steps="${TEST_POLICY_STEPS}" \
     --test-success-after-steps="${TEST_SUCCESS_AFTER_STEPS}"
 fi
@@ -274,5 +277,6 @@ exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --test_audio_path="${TEST_AUDIO_PATH}" \
   --max_cycles="${MAX_CYCLES}" \
   --reset_pause_s="${RESET_PAUSE_S}" \
+  --result_json_path="${RESULT_JSON_PATH}" \
   --test_policy_steps="${TEST_POLICY_STEPS}" \
   --test_success_after_steps="${TEST_SUCCESS_AFTER_STEPS}"

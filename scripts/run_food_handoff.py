@@ -3,6 +3,7 @@
 """Voice-gated multi-policy food handoff runtime for SO-101."""
 
 import logging
+import json
 import tempfile
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -78,6 +79,7 @@ class FoodHandoffConfig(RolloutConfig):
     test_audio_path: str = ""
     max_cycles: int = 0
     reset_pause_s: float = 7.0
+    result_json_path: str = ""
     test_policy_steps: int = 5
     test_success_after_steps: int = 3
 
@@ -140,6 +142,7 @@ def main(cfg: FoodHandoffConfig) -> None:
 
     base_ood_detector_path = cfg.ood_detector_path
     cycle = 0
+    cycle_results = []
     logger.info(
         "Starting handoff loop (max_cycles=%s, reset_pause_s=%.1f)",
         cfg.max_cycles if cfg.max_cycles > 0 else "unlimited",
@@ -177,6 +180,15 @@ def main(cfg: FoodHandoffConfig) -> None:
                     logger.warning("[REQUEST] could not classify target")
                     speak(tts_worker, choose_food_handoff_ood_phrase(), wait=True)
                     logger.info("[CYCLE] complete cycle=%d outcome=ood_unclassified", cycle)
+                    cycle_results.append(
+                        handoff_result(
+                            cycle=cycle,
+                            target=selected_target,
+                            policy=None,
+                            outcome="ood_unclassified",
+                        )
+                    )
+                    write_result_json(cfg.result_json_path, cycle_results)
                     reset_between_cycles(cfg, cycle)
                     continue
 
@@ -192,6 +204,15 @@ def main(cfg: FoodHandoffConfig) -> None:
             if cfg.test_mode:
                 outcome = run_mock_policy_flow(cfg, selected_policy, tts_worker)
                 logger.info("[CYCLE] complete cycle=%d outcome=%s", cycle, outcome)
+                cycle_results.append(
+                    handoff_result(
+                        cycle=cycle,
+                        target=selected_policy.target,
+                        policy=selected_policy,
+                        outcome=outcome,
+                    )
+                )
+                write_result_json(cfg.result_json_path, cycle_results)
                 reset_between_cycles(cfg, cycle)
                 continue
 
@@ -247,6 +268,15 @@ def main(cfg: FoodHandoffConfig) -> None:
                 openai_success_config=openai_success_config,
             )
             logger.info("[CYCLE] complete cycle=%d outcome=%s", cycle, outcome)
+            cycle_results.append(
+                handoff_result(
+                    cycle=cycle,
+                    target=selected_policy.target,
+                    policy=selected_policy,
+                    outcome=outcome,
+                )
+            )
+            write_result_json(cfg.result_json_path, cycle_results)
             if outcome == "interrupted":
                 break
             reset_between_cycles(cfg, cycle)
@@ -255,6 +285,7 @@ def main(cfg: FoodHandoffConfig) -> None:
     finally:
         if tts_worker is not None:
             tts_worker.close(timeout=10.0)
+        write_result_json(cfg.result_json_path, cycle_results)
         logger.info("Handoff loop stopped after %d cycle(s)", cycle)
 
 
@@ -307,6 +338,35 @@ def set_policy_config(cfg: FoodHandoffConfig, policy_repo_id: str) -> None:
     cfg.policy = PreTrainedConfig.from_pretrained(policy_repo_id)
     cfg.policy.pretrained_path = policy_repo_id
     cfg.policy.device = cfg.device
+
+
+def handoff_result(cycle: int, target: str | None, policy, outcome: str) -> dict:
+    result = {
+        "cycle": cycle,
+        "target": target,
+        "outcome": outcome,
+        "success": outcome == "success",
+    }
+    if policy is not None:
+        result.update(
+            {
+                "display_name": policy.display_name,
+                "policy_repo_id": policy.policy_repo_id,
+                "task": policy.task,
+            }
+        )
+    return result
+
+
+def write_result_json(path: str, cycle_results: list[dict]) -> None:
+    if not path:
+        return
+    payload = {
+        "status": cycle_results[-1]["outcome"] if cycle_results else "not_started",
+        "success": bool(cycle_results and cycle_results[-1]["success"]),
+        "cycles": cycle_results,
+    }
+    Path(path).write_text(json.dumps(payload, indent=2))
 
 
 def resolve_config_path(value: str, config_path: str) -> str:
