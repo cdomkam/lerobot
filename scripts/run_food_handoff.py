@@ -68,6 +68,8 @@ class FoodHandoffConfig(RolloutConfig):
     ood_tts_queue_max: int = 25
     test_mode: bool = False
     test_audio_path: str = ""
+    max_cycles: int = 0
+    reset_pause_s: float = 7.0
     test_policy_steps: int = 5
     test_success_after_steps: int = 3
 
@@ -79,6 +81,10 @@ def main(cfg: FoodHandoffConfig) -> None:
         raise ValueError(
             f"only --strategy.type=base is supported for food handoff; got {cfg.strategy.type!r}"
         )
+    if cfg.max_cycles < 0:
+        raise ValueError("--max_cycles must be >= 0")
+    if cfg.reset_pause_s < 0:
+        raise ValueError("--reset_pause_s must be >= 0")
 
     policy_config = load_food_policy_config(cfg.food_policy_config)
     vision_config = load_vision_config(cfg.vision_config)
@@ -104,85 +110,111 @@ def main(cfg: FoodHandoffConfig) -> None:
         stt_config = load_elevenlabs_stt_config(cfg.ood_tts_config_path)
         logger.info("ElevenLabs STT enabled (model_id=scribe_v2)")
 
-    selected_target = canonicalize_target(cfg.target)
-    if cfg.target and selected_target is None:
+    target_override = canonicalize_target(cfg.target)
+    if cfg.target and target_override is None:
         raise ValueError("--target must be one of: strawberry, oreo, marshmallow")
 
-    logger.info("Waiting for hand in camera frame...")
-    if cfg.test_mode:
-        logger.info("[HAND] mocked present")
-    else:
-        wait_for_hand(vision_config.hand, timeout_s=cfg.hand_wait_timeout_s)
-    logger.info("[HAND] present")
-
-    if selected_target is None:
-        if stt_config is None:
-            raise ValueError("--no-stt requires --target strawberry|oreo|marshmallow")
-        selected_target = listen_and_classify_request(cfg, stt_config)
-        if selected_target is None:
-            logger.warning("[REQUEST] could not classify target")
-            speak(tts_worker, choose_food_handoff_ood_phrase(), wait=True)
-            if tts_worker is not None:
-                tts_worker.close(timeout=10.0)
-            return
-
-    selected_policy = policy_config.require(selected_target)
+    base_ood_detector_path = cfg.ood_detector_path
+    cycle = 0
     logger.info(
-        "[REQUEST] target=%s policy=%s task=%r",
-        selected_policy.target,
-        selected_policy.policy_repo_id,
-        selected_policy.task,
+        "Starting handoff loop (max_cycles=%s, reset_pause_s=%.1f)",
+        cfg.max_cycles if cfg.max_cycles > 0 else "unlimited",
+        cfg.reset_pause_s,
     )
+    try:
+        while cfg.max_cycles == 0 or cycle < cfg.max_cycles:
+            cycle += 1
+            logger.info("[CYCLE] start cycle=%d", cycle)
+            selected_target = target_override
 
-    if cfg.test_mode:
-        run_mock_policy_flow(cfg, selected_policy, tts_worker)
-        return
+            logger.info("Waiting for hand in camera frame...")
+            if cfg.test_mode:
+                logger.info("[HAND] mocked present")
+            else:
+                wait_for_hand(vision_config.hand, timeout_s=cfg.hand_wait_timeout_s)
+            logger.info("[HAND] present")
 
-    setattr(cfg.policy, "path", selected_policy.policy_repo_id)
-    setattr(cfg, "task", selected_policy.task)
-    if selected_policy.ood_detector_path:
-        cfg.ood_detector_path = resolve_config_path(
-            selected_policy.ood_detector_path,
-            cfg.food_policy_config,
-        )
-    if not cfg.ood_detector_path:
-        raise ValueError(
-            "No OOD detector configured. Set --ood_detector_path or target.ood_detector_path "
-            "in the food policy config."
-        )
+            if selected_target is None:
+                if stt_config is None:
+                    raise ValueError("--no-stt requires --target strawberry|oreo|marshmallow")
+                selected_target = listen_and_classify_request(cfg, stt_config)
+                if selected_target is None:
+                    logger.warning("[REQUEST] could not classify target")
+                    speak(tts_worker, choose_food_handoff_ood_phrase(), wait=True)
+                    logger.info("[CYCLE] complete cycle=%d outcome=ood_unclassified", cycle)
+                    reset_between_cycles(cfg, cycle)
+                    continue
 
-    shutdown_event = ProcessSignalHandler(use_threads=True, display_pid=False).shutdown_event
-    detector = OODDetector.load(cfg.ood_detector_path)
-    logger.info(
-        "OOD detector loaded from %s (threshold=%.3f, pca_components=%s)",
-        cfg.ood_detector_path,
-        detector.threshold,
-        detector.pca_components,
-    )
+            selected_policy = policy_config.require(selected_target)
+            logger.info(
+                "[REQUEST] target=%s policy=%s task=%r",
+                selected_policy.target,
+                selected_policy.policy_repo_id,
+                selected_policy.task,
+            )
 
-    logger.info("Building rollout context for selected policy...")
-    ctx = build_rollout_context(cfg, shutdown_event)
-    if cfg.ood_encoder == "act_backbone":
-        encoder = ACTBackboneEncoder(policy=ctx.policy.policy, device=cfg.device)
-    elif cfg.ood_encoder.startswith("dinov2_"):
-        encoder = DinoV2Encoder(model=cfg.ood_encoder, device=cfg.device)
-    else:
-        raise ValueError(
-            f"unknown --ood_encoder {cfg.ood_encoder!r}; expected 'act_backbone' or 'dinov2_<size>'"
-        )
+            if cfg.test_mode:
+                outcome = run_mock_policy_flow(cfg, selected_policy, tts_worker)
+                logger.info("[CYCLE] complete cycle=%d outcome=%s", cycle, outcome)
+                reset_between_cycles(cfg, cycle)
+                continue
 
-    success_detector = TargetSuccessDetector(vision_config.success)
-    run_selected_policy(
-        cfg=cfg,
-        ctx=ctx,
-        detector=detector,
-        encoder=encoder,
-        success_detector=success_detector,
-        selected_policy=selected_policy,
-        tts_worker=tts_worker,
-        shutdown_event=shutdown_event,
-        vision_config=vision_config,
-    )
+            setattr(cfg.policy, "path", selected_policy.policy_repo_id)
+            setattr(cfg, "task", selected_policy.task)
+            ood_detector_path = base_ood_detector_path
+            if selected_policy.ood_detector_path:
+                ood_detector_path = resolve_config_path(
+                    selected_policy.ood_detector_path,
+                    cfg.food_policy_config,
+                )
+            if not ood_detector_path:
+                raise ValueError(
+                    "No OOD detector configured. Set --ood_detector_path or target.ood_detector_path "
+                    "in the food policy config."
+                )
+
+            shutdown_event = ProcessSignalHandler(use_threads=True, display_pid=False).shutdown_event
+            detector = OODDetector.load(ood_detector_path)
+            logger.info(
+                "OOD detector loaded from %s (threshold=%.3f, pca_components=%s)",
+                ood_detector_path,
+                detector.threshold,
+                detector.pca_components,
+            )
+
+            logger.info("Building rollout context for selected policy...")
+            ctx = build_rollout_context(cfg, shutdown_event)
+            if cfg.ood_encoder == "act_backbone":
+                encoder = ACTBackboneEncoder(policy=ctx.policy.policy, device=cfg.device)
+            elif cfg.ood_encoder.startswith("dinov2_"):
+                encoder = DinoV2Encoder(model=cfg.ood_encoder, device=cfg.device)
+            else:
+                raise ValueError(
+                    f"unknown --ood_encoder {cfg.ood_encoder!r}; expected 'act_backbone' or 'dinov2_<size>'"
+                )
+
+            success_detector = TargetSuccessDetector(vision_config.success)
+            outcome = run_selected_policy(
+                cfg=cfg,
+                ctx=ctx,
+                detector=detector,
+                encoder=encoder,
+                success_detector=success_detector,
+                selected_policy=selected_policy,
+                tts_worker=tts_worker,
+                shutdown_event=shutdown_event,
+                vision_config=vision_config,
+            )
+            logger.info("[CYCLE] complete cycle=%d outcome=%s", cycle, outcome)
+            if outcome == "interrupted":
+                break
+            reset_between_cycles(cfg, cycle)
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+    finally:
+        if tts_worker is not None:
+            tts_worker.close(timeout=10.0)
+        logger.info("Handoff loop stopped after %d cycle(s)", cycle)
 
 
 def listen_and_classify_request(cfg: FoodHandoffConfig, stt_config) -> str | None:
@@ -231,6 +263,18 @@ def resolve_config_path(value: str, config_path: str) -> str:
     return str(base / path)
 
 
+def reset_between_cycles(cfg: FoodHandoffConfig, cycle: int) -> None:
+    if cfg.max_cycles > 0 and cycle >= cfg.max_cycles:
+        return
+    if cfg.reset_pause_s <= 0:
+        return
+    logger.info(
+        "[CYCLE] reset pause %.1fs; move the hand out of frame before the next cycle",
+        cfg.reset_pause_s,
+    )
+    time.sleep(cfg.reset_pause_s)
+
+
 def wait_for_hand(hand_config, timeout_s: float = 0.0) -> None:
     try:
         import cv2
@@ -275,7 +319,7 @@ def run_selected_policy(
     tts_worker: ElevenLabsTTSWorker | None,
     shutdown_event,
     vision_config,
-) -> None:
+) -> str:
     robot = ctx.hardware.robot_wrapper
     processors = ctx.processors
     engine = ctx.policy.inference
@@ -287,6 +331,7 @@ def run_selected_policy(
     sum_score = 0.0
     success = False
     success_frame = 0
+    outcome = "timeout"
 
     engine.reset()
     engine.start()
@@ -355,6 +400,7 @@ def run_selected_policy(
             if success_result.detected:
                 success = True
                 success_frame = n_seen
+                outcome = "success"
                 logger.info(
                     "[TASK_SUCCESS] target=%s frame=%d confidence=%.3f %s",
                     selected_policy.target,
@@ -376,6 +422,7 @@ def run_selected_policy(
                 logger.warning("loop running slow (%.1f Hz < target %.0f Hz)", 1.0 / dt, cfg.fps)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
+        outcome = "interrupted"
     finally:
         engine.stop()
         inner_robot = robot.inner
@@ -384,8 +431,6 @@ def run_selected_policy(
         teleop = ctx.hardware.teleop
         if teleop is not None and teleop.is_connected:
             teleop.disconnect()
-        if tts_worker is not None:
-            tts_worker.close()
         mean_score = sum_score / max(n_seen, 1)
         logger.info(
             "Run complete: target=%s success=%s success_frame=%s frames=%d actions=%d "
@@ -400,13 +445,14 @@ def run_selected_policy(
             mean_score,
             detector.threshold,
         )
+    return outcome
 
 
 def run_mock_policy_flow(
     cfg: FoodHandoffConfig,
     selected_policy,
     tts_worker: ElevenLabsTTSWorker | None,
-) -> None:
+) -> str:
     if cfg.test_policy_steps <= 0:
         raise ValueError("--test_policy_steps must be positive")
     if cfg.test_success_after_steps <= 0:
@@ -439,8 +485,6 @@ def run_mock_policy_flow(
             break
         time.sleep(1.0 / max(cfg.fps, 1))
 
-    if tts_worker is not None:
-        tts_worker.close(timeout=10.0)
     logger.info(
         "Run complete: target=%s success=%s success_frame=%s frames=%d actions=%d "
         "ood=0 (0.0%%) mean_score=0.000 threshold=0.000 test_mode=true",
@@ -450,6 +494,7 @@ def run_mock_policy_flow(
         int(success_frame) if success else cfg.test_policy_steps,
         n_actions,
     )
+    return "success" if success else "timeout"
 
 
 def speak(worker: ElevenLabsTTSWorker | None, phrase: str, wait: bool = False) -> None:

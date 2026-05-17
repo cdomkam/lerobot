@@ -11,9 +11,11 @@ The handoff flow is the same in mock mode and robot mode:
 4. Run the selected food handoff policy.
 5. Detect success or OOD.
 6. Speak the outcome with ElevenLabs TTS.
+7. Pause so the hand can leave the frame, then repeat.
 
-The current runner executes one handoff cycle per process. Test mode mocks the
-LeRobot/robot pieces; robot mode removes that flag and connects to SO-101.
+Robot mode repeats until interrupted by default. Test mode runs one cycle by
+default, so local commands finish; use `--max-cycles N` to test multiple cycles
+or `--max-cycles 0` for an unlimited loop.
 
 ## Setup
 
@@ -69,9 +71,19 @@ Bypass STT and force a target:
 ./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target marshmallow
 ```
 
+Run multiple mocked cycles and pause 7 seconds between them so the hand can move
+out of frame:
+
+```bash
+./scripts/run_food_handoff.sh \
+  --test-mode --no-voice --no-stt --target strawberry \
+  --max-cycles 3 --reset-pause-s 7
+```
+
 Expected successful mock logs include:
 
 ```text
+[CYCLE] start cycle=1
 [HAND] mocked present
 [REQUEST] test_audio=... transcript='Please put the strawberry in my hand' target=strawberry
 [REQUEST] target=strawberry policy=...
@@ -79,6 +91,7 @@ Expected successful mock logs include:
 [MOCK_ACTION] frame=1 target=strawberry
 [TASK_SUCCESS] target=strawberry frame=3 confidence=1.000 mocked_success=true
 Run complete: target=strawberry success=True ... test_mode=true
+[CYCLE] complete cycle=1 outcome=success
 ```
 
 ## Robot Handoff
@@ -104,11 +117,19 @@ Run the same flow against the robot by removing `--test-mode`:
 ./scripts/run_food_handoff.sh
 ```
 
+That command loops until Ctrl-C. Between cycles it waits `RESET_PAUSE_S=7`
+seconds by default so the previous hand can move out of frame. Adjust it with:
+
+```bash
+./scripts/run_food_handoff.sh --reset-pause-s 10
+```
+
 Useful robot-mode variants:
 
 ```bash
 ./scripts/run_food_handoff.sh --no-voice
 ./scripts/run_food_handoff.sh --no-voice --no-stt --target strawberry
+./scripts/run_food_handoff.sh --max-cycles 1
 ```
 
 ## Smoke Tests

@@ -10,9 +10,10 @@ LeRobot, hardware, policy execution, OOD scoring, and success detection with
 deterministic mocks. Removing `--test-mode` runs the same flow against the
 SO-101.
 
-The current command runs one handoff cycle per process. It loops over camera and
-policy frames during that cycle, then exits after success, OOD/unclassified
-request, timeout, or interruption.
+Robot mode repeats until interrupted by default. Test mode runs one cycle by
+default, so local commands finish; use `--max-cycles N` to test multiple cycles.
+Between cycles the runner pauses for `RESET_PAUSE_S=7` seconds by default so the
+existing hand can move out of frame before the next hand trigger.
 
 ## Setup
 
@@ -64,6 +65,14 @@ Bypass STT and force a target:
 ./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target strawberry
 ```
 
+Run multiple mocked cycles with the reset pause visible in logs:
+
+```bash
+./scripts/run_food_handoff.sh \
+  --test-mode --no-voice --no-stt --target strawberry \
+  --max-cycles 3 --reset-pause-s 7
+```
+
 ## Robot Run
 
 Run the same flow against SO-101 by removing `--test-mode`:
@@ -73,11 +82,15 @@ Run the same flow against SO-101 by removing `--test-mode`:
 ```
 
 Voice can be disabled independently with `--no-voice`. Speech-to-text can be
-disabled only when `--target strawberry|oreo|marshmallow` is supplied:
+disabled only when `--target strawberry|oreo|marshmallow` is supplied. Use
+`--max-cycles N` to stop after N handoffs, or leave it unset for an unlimited
+robot loop:
 
 ```bash
 ./scripts/run_food_handoff.sh --no-voice
 ./scripts/run_food_handoff.sh --no-voice --no-stt --target strawberry
+./scripts/run_food_handoff.sh --max-cycles 1
+./scripts/run_food_handoff.sh --reset-pause-s 10
 ```
 
 ## Flow
@@ -92,15 +105,15 @@ disabled only when `--target strawberry|oreo|marshmallow` is supplied:
 6. `SUCCESS`: Detect target-colored pixels in the configured hand ROI for a
    stable debounce window, then speak success.
 7. `OOD`: Speak an OOD phrase on scene OOD or unclassified requests.
-
-After step 6 or 7, the process exits today. A future continuous mode can wrap
-this cycle and return to `WAIT_FOR_HAND`.
+8. `RESET_PAUSE`: Wait 5-10 seconds, default 7, so the hand can leave the frame.
+9. Return to `WAIT_FOR_HAND` unless the max cycle count was reached.
 
 ## Logs
 
 Expected log markers:
 
 ```text
+[CYCLE] start cycle=1
 [HAND] present
 [REQUEST] transcript='Please bring me the Oreo' target=oreo
 [REQUEST] target=oreo policy=org/oreo-policy task='Pick up the Oreo...'
@@ -108,6 +121,8 @@ Expected log markers:
 [OOD] frame=87 score=34.219 threshold=21.080
 [TASK_SUCCESS] target=oreo frame=342 confidence=0.091 target_blob_fraction=0.091
 Run complete: target=oreo success=True success_frame=342 ...
+[CYCLE] complete cycle=1 outcome=success
+[CYCLE] reset pause 7.0s; move the hand out of frame before the next cycle
 ```
 
 ## Smoke Tests

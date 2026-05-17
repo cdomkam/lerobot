@@ -30,6 +30,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tts-enabled", default="true")
     parser.add_argument("--tts-config-path", default=".env")
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--max-cycles", type=int, default=1)
+    parser.add_argument("--reset-pause-s", type=float, default=7.0)
     parser.add_argument("--test-policy-steps", type=int, default=5)
     parser.add_argument("--test-success-after-steps", type=int, default=3)
     return parser.parse_args()
@@ -40,6 +42,10 @@ def main() -> None:
     args = parse_args()
     stt_enabled = parse_bool(args.stt_enabled)
     tts_enabled = parse_bool(args.tts_enabled)
+    if args.max_cycles < 0:
+        raise ValueError("--max-cycles must be >= 0")
+    if args.reset_pause_s < 0:
+        raise ValueError("--reset-pause-s must be >= 0")
 
     policy_config = load_food_policy_config(args.food_policy_config)
 
@@ -54,37 +60,101 @@ def main() -> None:
             tts_config.model_id,
         )
 
-    logger.info("Waiting for hand in camera frame...")
-    logger.info("[HAND] mocked present")
-    logger.info("[HAND] present")
-
-    target = args.target.strip().lower() or None
-    if target is None:
-        if not stt_enabled:
-            raise ValueError("--stt-enabled=false requires --target")
+    stt_config = None
+    if stt_enabled and not args.target.strip():
         if not args.test_audio_path:
             raise ValueError("--test-audio-path is required when STT is enabled in test mode")
         stt_config = load_elevenlabs_stt_config(args.tts_config_path)
-        transcript = transcribe_audio_file(
-            stt_config,
-            args.test_audio_path,
-            keyterms=["Strawberry", "Oreo", "Marshmallow", "Marshmellow"],
-        )
-        target = classify_food_request(transcript)
-        logger.info("[REQUEST] test_audio=%s transcript=%r target=%s", args.test_audio_path, transcript, target)
-        if target is None:
-            logger.warning("[REQUEST] could not classify target")
-            speak(tts_worker, choose_food_handoff_ood_phrase(), wait=True)
-            close_tts(tts_worker)
-            raise SystemExit(2)
 
-    selected_policy = policy_config.require(target)
+    cycle = 0
     logger.info(
-        "[REQUEST] target=%s policy=%s task=%r",
-        selected_policy.target,
-        selected_policy.policy_repo_id,
-        selected_policy.task,
+        "Starting mocked handoff loop (max_cycles=%s, reset_pause_s=%.1f)",
+        args.max_cycles if args.max_cycles > 0 else "unlimited",
+        args.reset_pause_s,
     )
+    try:
+        while args.max_cycles == 0 or cycle < args.max_cycles:
+            cycle += 1
+            logger.info("[CYCLE] start cycle=%d", cycle)
+            logger.info("Waiting for hand in camera frame...")
+            logger.info("[HAND] mocked present")
+            logger.info("[HAND] present")
+
+            target = args.target.strip().lower() or None
+            if target is None:
+                if not stt_enabled:
+                    raise ValueError("--stt-enabled=false requires --target")
+                assert stt_config is not None
+                transcript = transcribe_audio_file(
+                    stt_config,
+                    args.test_audio_path,
+                    keyterms=["Strawberry", "Oreo", "Marshmallow", "Marshmellow"],
+                )
+                target = classify_food_request(transcript)
+                logger.info(
+                    "[REQUEST] test_audio=%s transcript=%r target=%s",
+                    args.test_audio_path,
+                    transcript,
+                    target,
+                )
+                if target is None:
+                    logger.warning("[REQUEST] could not classify target")
+                    speak(tts_worker, choose_food_handoff_ood_phrase(), wait=True)
+                    logger.info("[CYCLE] complete cycle=%d outcome=ood_unclassified", cycle)
+                    reset_between_cycles(args, cycle)
+                    continue
+
+            selected_policy = policy_config.require(target)
+            logger.info(
+                "[REQUEST] target=%s policy=%s task=%r",
+                selected_policy.target,
+                selected_policy.policy_repo_id,
+                selected_policy.task,
+            )
+            outcome = run_mock_policy_cycle(args, selected_policy, tts_worker)
+            logger.info("[CYCLE] complete cycle=%d outcome=%s", cycle, outcome)
+            reset_between_cycles(args, cycle)
+    finally:
+        close_tts(tts_worker)
+        logger.info("Mocked handoff loop stopped after %d cycle(s)", cycle)
+
+
+def parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def speak(worker: ElevenLabsTTSWorker | None, phrase: str, wait: bool = False) -> None:
+    if worker is None:
+        return
+    if not worker.speak(phrase):
+        logger.warning("TTS queue full; dropping voice phrase")
+        return
+    if wait and not worker.wait_until_idle(timeout=30.0):
+        logger.warning("Timed out waiting for TTS phrase to finish")
+
+
+def close_tts(worker: ElevenLabsTTSWorker | None) -> None:
+    if worker is not None:
+        worker.close(timeout=10.0)
+
+
+def reset_between_cycles(args: argparse.Namespace, cycle: int) -> None:
+    if args.max_cycles > 0 and cycle >= args.max_cycles:
+        return
+    if args.reset_pause_s <= 0:
+        return
+    logger.info(
+        "[CYCLE] reset pause %.1fs; move the hand out of frame before the next cycle",
+        args.reset_pause_s,
+    )
+    time.sleep(args.reset_pause_s)
+
+
+def run_mock_policy_cycle(
+    args: argparse.Namespace,
+    selected_policy,
+    tts_worker: ElevenLabsTTSWorker | None,
+) -> str:
     logger.info(
         "[POLICY] mocked starting target=%s policy=%s task=%r",
         selected_policy.target,
@@ -113,7 +183,6 @@ def main() -> None:
             break
         time.sleep(1.0 / max(args.fps, 1))
 
-    close_tts(tts_worker)
     logger.info(
         "Run complete: target=%s success=%s success_frame=%s frames=%d actions=%d "
         "ood=0 (0.0%%) mean_score=0.000 threshold=0.000 test_mode=true",
@@ -123,25 +192,7 @@ def main() -> None:
         int(success_frame) if success else args.test_policy_steps,
         n_actions,
     )
-
-
-def parse_bool(value: str) -> bool:
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def speak(worker: ElevenLabsTTSWorker | None, phrase: str, wait: bool = False) -> None:
-    if worker is None:
-        return
-    if not worker.speak(phrase):
-        logger.warning("TTS queue full; dropping voice phrase")
-        return
-    if wait and not worker.wait_until_idle(timeout=30.0):
-        logger.warning("Timed out waiting for TTS phrase to finish")
-
-
-def close_tts(worker: ElevenLabsTTSWorker | None) -> None:
-    if worker is not None:
-        worker.close(timeout=10.0)
+    return "success" if success else "timeout"
 
 
 if __name__ == "__main__":

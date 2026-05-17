@@ -13,9 +13,10 @@ usage() {
 Usage: ./scripts/run_food_handoff.sh [--no-voice] [--no-stt --target strawberry|oreo|marshmallow]
        ./scripts/run_food_handoff.sh --test-mode --test-audio recordings/voice_requests/strawberry_request.wav --no-voice
 
-Waits for a hand in frame, records a short voice request, classifies the food
-target, runs the matching SO-101 policy, detects successful placement, and
-speaks success/OOD audio through ElevenLabs.
+Loops over handoff cycles: wait for hand, record speech, classify target, run
+the matching policy, detect placement/OOD, speak the outcome, then pause before
+waiting for the next hand. Use --max-cycles N to stop after N cycles; 0 means
+unlimited.
 USAGE
 }
 
@@ -24,6 +25,8 @@ NO_STT=false
 TEST_MODE=false
 TEST_AUDIO_PATH="${TEST_AUDIO_PATH:-}"
 TARGET="${TARGET:-}"
+MAX_CYCLES="${MAX_CYCLES:-}"
+RESET_PAUSE_S="${RESET_PAUSE_S:-7}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-voice)
@@ -44,6 +47,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --test-audio)
       TEST_AUDIO_PATH="${2:-}"
+      shift 2
+      ;;
+    --max-cycles)
+      MAX_CYCLES="${2:-}"
+      shift 2
+      ;;
+    --reset-pause-s)
+      RESET_PAUSE_S="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -80,6 +91,14 @@ REQUEST_RECORDER_COMMAND="${REQUEST_RECORDER_COMMAND:-}"
 HAND_WAIT_TIMEOUT_S="${HAND_WAIT_TIMEOUT_S:-0}"
 TEST_POLICY_STEPS="${TEST_POLICY_STEPS:-5}"
 TEST_SUCCESS_AFTER_STEPS="${TEST_SUCCESS_AFTER_STEPS:-3}"
+
+if [[ "${MAX_CYCLES}" == "" ]]; then
+  if [[ "${TEST_MODE}" == "true" ]]; then
+    MAX_CYCLES=1
+  else
+    MAX_CYCLES=0
+  fi
+fi
 
 if [[ "${TEST_MODE}" == "true" ]]; then
   if [[ "${FOOD_POLICY_CONFIG}" == "config/food_policies.json" ]]; then
@@ -149,6 +168,8 @@ echo "STT enabled:     ${STT_ENABLED}"
 echo "Target override: ${TARGET:-none}"
 echo "Test mode:       ${TEST_MODE}"
 echo "Test audio:      ${TEST_AUDIO_PATH:-none}"
+echo "Max cycles:      ${MAX_CYCLES} (0=unlimited)"
+echo "Reset pause:     ${RESET_PAUSE_S}s"
 echo "Duration:        ${DURATION}s"
 echo
 if [[ "${TEST_MODE}" == "true" ]]; then
@@ -168,6 +189,8 @@ if [[ "${TEST_MODE}" == "true" ]]; then
     --tts-enabled="${OOD_TTS_ENABLED}" \
     --tts-config-path="${OOD_TTS_CONFIG_PATH}" \
     --fps="${FPS}" \
+    --max-cycles="${MAX_CYCLES}" \
+    --reset-pause-s="${RESET_PAUSE_S}" \
     --test-policy-steps="${TEST_POLICY_STEPS}" \
     --test-success-after-steps="${TEST_SUCCESS_AFTER_STEPS}"
 fi
@@ -209,5 +232,7 @@ exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --ood_tts_queue_max="${OOD_TTS_QUEUE_MAX}" \
   --test_mode="${TEST_MODE}" \
   --test_audio_path="${TEST_AUDIO_PATH}" \
+  --max_cycles="${MAX_CYCLES}" \
+  --reset_pause_s="${RESET_PAUSE_S}" \
   --test_policy_steps="${TEST_POLICY_STEPS}" \
   --test_success_after_steps="${TEST_SUCCESS_AFTER_STEPS}"
