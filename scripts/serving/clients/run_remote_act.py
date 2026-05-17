@@ -83,6 +83,9 @@ class RunConfig:
     timeout_s: float = 5.0
     jpeg_quality: int = 90
     on_refill_failure: str = "hold"  # "hold" | "raise"
+    prefetch_at_actions: int = 20
+    comm_retries: int = 3
+    comm_retry_sleep_s: float = 0.02
 
     # Loop.
     fps: int = 30
@@ -97,6 +100,7 @@ def _make_log_record(
     requested: dict[str, float],
     sent: dict[str, float],
     refill_calls: int,
+    refill_latency_ms: float | None,
     slow_tick_ms: float | None,
 ) -> dict:
     state = {k: float(obs[k]) for k in SO101_JOINT_ORDER}
@@ -110,18 +114,62 @@ def _make_log_record(
         "max_abs_delta": max_abs_delta,
         "sent": True,
         "refill_calls_total": refill_calls,
+        "refill_latency_ms": refill_latency_ms,
         "slow_tick_ms": slow_tick_ms,
     }
+
+
+def _as_float_or_none(value) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _safe_action_from_observation(
+    requested: dict[str, float],
+    obs: dict,
+    max_relative_target: float | None,
+) -> dict[str, float]:
+    if max_relative_target is None:
+        return requested
+
+    safe = {}
+    for key, goal in requested.items():
+        present = float(obs[key])
+        delta = float(goal) - present
+        safe[key] = present + max(min(delta, max_relative_target), -max_relative_target)
+    return safe
+
+
+def _retry_io(label: str, fn, retries: int, sleep_s: float):
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            return fn()
+        except (ConnectionError, TimeoutError) as exc:
+            last_exc = exc
+            if attempt >= retries:
+                break
+            logger.warning("%s failed (%s); retrying %d/%d", label, exc, attempt + 1, retries)
+            time.sleep(sleep_s)
+    raise last_exc
 
 
 def main(cfg: RunConfig) -> int:
     if cfg.on_refill_failure not in ("hold", "raise"):
         raise SystemExit(f"on_refill_failure must be 'hold' or 'raise'")
 
+    max_relative_target = _as_float_or_none(cfg.robot.max_relative_target)
+    # We clamp in this runner using the observation already read for the tick.
+    # This avoids SOFollower.send_action() doing an extra Present_Position sync_read,
+    # which was a major source of Feetech "no status packet" failures.
+    cfg.robot.max_relative_target = None
     robot = SOFollower(cfg.robot)
     logger.info("connecting to robot on %s ...", cfg.robot.port)
     robot.connect()
     logger.info("connected. cameras=%s", list(robot.cameras.keys()))
+    if max_relative_target is not None:
+        logger.info("using runner-side max_relative_target=%.3f", max_relative_target)
 
     policy = RemoteACTPolicy(
         url=cfg.url,
@@ -132,6 +180,7 @@ def main(cfg: RunConfig) -> int:
         timeout_s=cfg.timeout_s,
         jpeg_quality=cfg.jpeg_quality,
         on_refill_failure=cfg.on_refill_failure,
+        prefetch_at_actions=cfg.prefetch_at_actions,
     )
 
     log_f = open(cfg.log_path, "w") if cfg.log_path else None
@@ -159,9 +208,30 @@ def main(cfg: RunConfig) -> int:
         while not stopping and (cfg.max_ticks is None or tick < cfg.max_ticks):
             t0 = time.perf_counter()
 
-            obs = robot.get_observation()
+            try:
+                obs = _retry_io(
+                    "get_observation",
+                    robot.get_observation,
+                    cfg.comm_retries,
+                    cfg.comm_retry_sleep_s,
+                )
+            except (ConnectionError, TimeoutError) as exc:
+                logger.error("get_observation failed after retries; skipping tick %d: %s", tick, exc)
+                tick += 1
+                time.sleep(tick_period)
+                continue
             requested = policy.select_action(obs)
-            sent = robot.send_action(requested)
+            safe_requested = _safe_action_from_observation(requested, obs, max_relative_target)
+            try:
+                sent = _retry_io(
+                    "send_action",
+                    lambda: robot.send_action(safe_requested),
+                    cfg.comm_retries,
+                    cfg.comm_retry_sleep_s,
+                )
+            except (ConnectionError, TimeoutError) as exc:
+                logger.error("send_action failed after retries; skipping tick %d: %s", tick, exc)
+                sent = {k: float(obs[k]) for k in SO101_JOINT_ORDER}
 
             elapsed = time.perf_counter() - t0
             slow_tick_ms: float | None = None
@@ -175,8 +245,9 @@ def main(cfg: RunConfig) -> int:
             if log_f:
                 rec = _make_log_record(
                     tick, t0, obs, requested, sent,
-                    policy.refill_calls, slow_tick_ms,
+                    policy.refill_calls, policy.refill_latency_ms, slow_tick_ms,
                 )
+                rec["runner_safe_action"] = safe_requested
                 log_f.write(json.dumps(rec) + "\n")
                 log_f.flush()
 

@@ -5,6 +5,7 @@
 import logging
 import tempfile
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,9 +60,11 @@ class FoodHandoffConfig(RolloutConfig):
     request_audio_sample_rate: int = 16000
     request_recorder_command: str = ""
     hand_wait_timeout_s: float = 0.0
+    ood_enabled: bool = False
     ood_detector_path: str = ""
     ood_camera: str = "front"
     ood_encoder: str = "act_backbone"
+    ood_every_n: int = 5
     ood_log_every_n: int = 1
     ood_log_in_dist_every_n: int = 0
     ood_tts_enabled: bool = True
@@ -92,6 +95,8 @@ def main(cfg: FoodHandoffConfig) -> None:
         raise ValueError("--reset_pause_s must be >= 0")
     if cfg.openai_success_every_n <= 0:
         raise ValueError("--openai_success_every_n must be positive")
+    if cfg.ood_every_n <= 0:
+        raise ValueError("--ood_every_n must be positive")
 
     policy_config = load_food_policy_config(cfg.food_policy_config)
     vision_config = load_vision_config(cfg.vision_config)
@@ -192,37 +197,41 @@ def main(cfg: FoodHandoffConfig) -> None:
 
             setattr(cfg, "task", selected_policy.task)
             ood_detector_path = base_ood_detector_path
-            if selected_policy.ood_detector_path:
+            if cfg.ood_enabled and selected_policy.ood_detector_path:
                 ood_detector_path = resolve_config_path(
                     selected_policy.ood_detector_path,
                     cfg.food_policy_config,
                 )
-            if not ood_detector_path:
-                raise ValueError(
-                    "No OOD detector configured. Set --ood_detector_path or target.ood_detector_path "
-                    "in the food policy config."
+            if not cfg.ood_enabled:
+                detector = None
+                logger.info("OOD scoring disabled.")
+            elif not ood_detector_path:
+                detector = None
+                logger.info("No OOD detector configured; OOD scoring disabled for this cycle.")
+            else:
+                detector = OODDetector.load(ood_detector_path)
+                logger.info(
+                    "OOD detector loaded from %s (threshold=%.3f, pca_components=%s)",
+                    ood_detector_path,
+                    detector.threshold,
+                    detector.pca_components,
                 )
 
             shutdown_event = ProcessSignalHandler(use_threads=True, display_pid=False).shutdown_event
-            detector = OODDetector.load(ood_detector_path)
-            logger.info(
-                "OOD detector loaded from %s (threshold=%.3f, pca_components=%s)",
-                ood_detector_path,
-                detector.threshold,
-                detector.pca_components,
-            )
 
             logger.info("Building rollout context for selected policy...")
             set_policy_config(cfg, selected_policy.policy_repo_id)
             ctx = build_rollout_context(cfg, shutdown_event)
-            if cfg.ood_encoder == "act_backbone":
-                encoder = ACTBackboneEncoder(policy=ctx.policy.policy, device=cfg.device)
-            elif cfg.ood_encoder.startswith("dinov2_"):
-                encoder = DinoV2Encoder(model=cfg.ood_encoder, device=cfg.device)
-            else:
-                raise ValueError(
-                    f"unknown --ood_encoder {cfg.ood_encoder!r}; expected 'act_backbone' or 'dinov2_<size>'"
-                )
+            encoder = None
+            if detector is not None:
+                if cfg.ood_encoder == "act_backbone":
+                    encoder = ACTBackboneEncoder(policy=ctx.policy.policy, device=cfg.device)
+                elif cfg.ood_encoder.startswith("dinov2_"):
+                    encoder = DinoV2Encoder(model=cfg.ood_encoder, device=cfg.device)
+                else:
+                    raise ValueError(
+                        f"unknown --ood_encoder {cfg.ood_encoder!r}; expected 'act_backbone' or 'dinov2_<size>'"
+                    )
 
             success_detector = TargetSuccessDetector(vision_config.success)
             outcome = run_selected_policy(
@@ -324,13 +333,27 @@ def reset_between_cycles(cfg: FoodHandoffConfig, cycle: int) -> None:
 def wait_for_hand(robot, hand_config, timeout_s: float = 0.0) -> None:
     detector = HandPresenceDetector(hand_config)
     start = time.perf_counter()
+    last_log = start
+    frames = 0
     while True:
         obs_raw = robot.get_observation()
         frame_rgb = extract_camera_frame(obs_raw, hand_config.camera_name)
         result = detector.update(frame_rgb)
+        frames += 1
         if result.detected:
-            logger.info("[HAND] score=%.3f %s", result.score, result.reason)
+            logger.info("[HAND] score=%.3f frames=%d %s", result.score, frames, result.reason)
             return
+        now = time.perf_counter()
+        if now - last_log >= 1.0:
+            logger.info(
+                "[HAND_WAIT] camera=%s frames=%d ready=%s score=%.3f %s",
+                hand_config.camera_name,
+                frames,
+                result.ready,
+                result.score,
+                result.reason,
+            )
+            last_log = now
         if timeout_s > 0 and (time.perf_counter() - start) >= timeout_s:
             raise TimeoutError(f"hand did not enter frame within {timeout_s:.1f}s")
         precise_sleep(1.0 / max(hand_config.fps, 1))
@@ -349,10 +372,19 @@ def disconnect_rollout_context(ctx) -> None:
         teleop.disconnect()
 
 
+def score_ood_frame(detector: OODDetector, encoder, frame) -> object:
+    embedding = encoder(frame)
+    return detector.score(embedding)
+
+
+def confirm_success_frame(openai_success_config, frame, display_name: str):
+    return confirm_food_handoff_success(openai_success_config, frame, display_name)
+
+
 def run_selected_policy(
     cfg: FoodHandoffConfig,
     ctx,
-    detector: OODDetector,
+    detector: OODDetector | None,
     encoder,
     success_detector: TargetSuccessDetector,
     selected_policy,
@@ -373,12 +405,19 @@ def run_selected_policy(
     success = False
     success_frame = 0
     last_openai_success_check_frame = 0
+    last_ood_check_frame = 0
+    pending_openai_success: Future | None = None
+    pending_openai_meta = None
+    pending_ood: Future | None = None
+    pending_ood_frame = 0
     outcome = "timeout"
 
     engine.reset()
     engine.start()
     engine.resume()
     t_start = time.perf_counter()
+    openai_executor = ThreadPoolExecutor(max_workers=1) if openai_success_config is not None else None
+    ood_executor = ThreadPoolExecutor(max_workers=1) if detector is not None else None
     logger.info(
         "[POLICY] starting target=%s fps=%d duration=%ds",
         selected_policy.target,
@@ -400,26 +439,46 @@ def run_selected_policy(
                 shutdown_event.set()
                 continue
 
-            embedding = encoder(frame)
-            result = detector.score(embedding)
             n_seen += 1
-            sum_score += result.score
-            if result.is_ood:
-                n_ood += 1
-                if cfg.ood_log_every_n > 0 and n_ood % cfg.ood_log_every_n == 0:
-                    logger.warning(
-                        "[OOD] frame=%d score=%.3f threshold=%.3f (%d/%d so far, %.1f%%)",
-                        n_seen,
-                        result.score,
-                        result.threshold,
-                        n_ood,
-                        n_seen,
-                        100.0 * n_ood / n_seen,
-                    )
-                if tts_worker is not None and n_ood % cfg.ood_tts_every_n == 0:
-                    speak(tts_worker, choose_food_handoff_ood_phrase())
-            elif cfg.ood_log_in_dist_every_n > 0 and n_seen % cfg.ood_log_in_dist_every_n == 0:
-                logger.info("[in-dist] frame=%d score=%.3f threshold=%.3f", n_seen, result.score, result.threshold)
+            if pending_ood is not None and pending_ood.done():
+                try:
+                    result = pending_ood.result()
+                except Exception as exc:
+                    logger.warning("[OOD] async score failed on frame=%d: %s", pending_ood_frame, exc)
+                else:
+                    sum_score += result.score
+                    if result.is_ood:
+                        n_ood += 1
+                        if cfg.ood_log_every_n > 0 and n_ood % cfg.ood_log_every_n == 0:
+                            logger.warning(
+                                "[OOD] frame=%d score=%.3f threshold=%.3f (%d/%d sampled so far)",
+                                pending_ood_frame,
+                                result.score,
+                                result.threshold,
+                                n_ood,
+                                max((pending_ood_frame + cfg.ood_every_n - 1) // cfg.ood_every_n, 1),
+                            )
+                        if tts_worker is not None and n_ood % cfg.ood_tts_every_n == 0:
+                            speak(tts_worker, choose_food_handoff_ood_phrase())
+                    elif cfg.ood_log_in_dist_every_n > 0 and pending_ood_frame % cfg.ood_log_in_dist_every_n == 0:
+                        logger.info(
+                            "[in-dist] frame=%d score=%.3f threshold=%.3f",
+                            pending_ood_frame,
+                            result.score,
+                            result.threshold,
+                        )
+                pending_ood = None
+                pending_ood_frame = 0
+
+            if (
+                detector is not None
+                and ood_executor is not None
+                and pending_ood is None
+                and n_seen - last_ood_check_frame >= cfg.ood_every_n
+            ):
+                pending_ood = ood_executor.submit(score_ood_frame, detector, encoder, frame.copy())
+                pending_ood_frame = n_seen
+                last_ood_check_frame = n_seen
 
             obs_processed = processors.robot_observation_processor(obs_raw)
             engine.notify_observation(obs_processed)
@@ -442,53 +501,67 @@ def run_selected_policy(
             local_success_candidate = success_result.detected
             success_confirmed = False
             success_source = ""
-            if openai_success_config is not None:
-                openai_due = n_seen - last_openai_success_check_frame >= cfg.openai_success_every_n
-                if local_success_candidate or openai_due:
-                    last_openai_success_check_frame = n_seen
-                    try:
-                        openai_result = confirm_food_handoff_success(
-                            openai_success_config,
-                            success_frame_raw,
-                            selected_policy.display_name,
+            if pending_openai_success is not None and pending_openai_success.done():
+                frame_id, opencv_candidate, opencv_score = pending_openai_meta
+                try:
+                    openai_result = pending_openai_success.result()
+                except Exception as exc:
+                    if opencv_candidate:
+                        logger.warning(
+                            "[OPENAI_SUCCESS] async confirmation failed; accepting OpenCV success: %s",
+                            exc,
                         )
-                    except Exception as exc:
-                        if local_success_candidate:
-                            logger.warning(
-                                "[OPENAI_SUCCESS] confirmation failed; accepting OpenCV success: %s",
-                                exc,
-                            )
-                            success_confirmed = True
-                            success_source = "opencv_openai_error"
-                        else:
-                            logger.warning("[OPENAI_SUCCESS] periodic check failed: %s", exc)
+                        success_confirmed = True
+                        success_source = "opencv_openai_error"
                     else:
+                        logger.warning("[OPENAI_SUCCESS] async periodic check failed: %s", exc)
+                else:
+                    logger.info(
+                        "[OPENAI_SUCCESS] frame=%d success=%s confidence=%.3f hand=%s "
+                        "visible=%s in_gripper=%s on_tray=%s opencv_candidate=%s "
+                        "opencv_score=%.3f reason=%r",
+                        frame_id,
+                        openai_result.success,
+                        openai_result.confidence,
+                        openai_result.user_hand_present,
+                        openai_result.target_food_visible,
+                        openai_result.target_food_in_robot_gripper,
+                        openai_result.target_food_on_tray,
+                        opencv_candidate,
+                        opencv_score,
+                        openai_result.reason,
+                    )
+                    success_confirmed = openai_result.success
+                    success_source = "openai" if success_confirmed else ""
+                    if opencv_candidate and not success_confirmed:
                         logger.info(
-                            "[OPENAI_SUCCESS] frame=%d success=%s confidence=%.3f hand=%s "
-                            "visible=%s in_gripper=%s on_tray=%s opencv_candidate=%s "
-                            "opencv_score=%.3f reason=%r",
-                            n_seen,
-                            openai_result.success,
+                            "[TASK_SUCCESS_CANDIDATE_REJECTED] target=%s frame=%d "
+                            "opencv_score=%.3f openai_confidence=%.3f",
+                            selected_policy.target,
+                            frame_id,
+                            opencv_score,
                             openai_result.confidence,
-                            openai_result.user_hand_present,
-                            openai_result.target_food_visible,
-                            openai_result.target_food_in_robot_gripper,
-                            openai_result.target_food_on_tray,
-                            local_success_candidate,
-                            success_result.score,
-                            openai_result.reason,
                         )
-                        success_confirmed = openai_result.success
-                        success_source = "openai" if success_confirmed else ""
-                        if local_success_candidate and not success_confirmed:
-                            logger.info(
-                                "[TASK_SUCCESS_CANDIDATE_REJECTED] target=%s frame=%d "
-                                "opencv_score=%.3f openai_confidence=%.3f",
-                                selected_policy.target,
-                                n_seen,
-                                success_result.score,
-                                openai_result.confidence,
-                            )
+                pending_openai_success = None
+                pending_openai_meta = None
+
+            if openai_success_config is not None and openai_executor is not None:
+                openai_due = n_seen - last_openai_success_check_frame >= cfg.openai_success_every_n
+                if pending_openai_success is None and (local_success_candidate or openai_due):
+                    last_openai_success_check_frame = n_seen
+                    pending_openai_meta = (n_seen, local_success_candidate, success_result.score)
+                    pending_openai_success = openai_executor.submit(
+                        confirm_success_frame,
+                        openai_success_config,
+                        success_frame_raw.copy(),
+                        selected_policy.display_name,
+                    )
+                    logger.info(
+                        "[OPENAI_SUCCESS] submitted async check frame=%d opencv_candidate=%s opencv_score=%.3f",
+                        n_seen,
+                        local_success_candidate,
+                        success_result.score,
+                    )
             elif local_success_candidate:
                 success_confirmed = True
                 success_source = "opencv"
@@ -519,6 +592,10 @@ def run_selected_policy(
         logger.info("Interrupted by user")
         outcome = "interrupted"
     finally:
+        if openai_executor is not None:
+            openai_executor.shutdown(wait=False, cancel_futures=True)
+        if ood_executor is not None:
+            ood_executor.shutdown(wait=False, cancel_futures=True)
         engine.stop()
         inner_robot = robot.inner
         if inner_robot.is_connected:
@@ -526,7 +603,8 @@ def run_selected_policy(
         teleop = ctx.hardware.teleop
         if teleop is not None and teleop.is_connected:
             teleop.disconnect()
-        mean_score = sum_score / max(n_seen, 1)
+        mean_score = sum_score / max(n_seen, 1) if detector is not None else 0.0
+        threshold = detector.threshold if detector is not None else 0.0
         logger.info(
             "Run complete: target=%s success=%s success_frame=%s frames=%d actions=%d "
             "ood=%d (%.1f%%) mean_score=%.3f threshold=%.3f",
@@ -538,7 +616,7 @@ def run_selected_policy(
             n_ood,
             100.0 * n_ood / max(n_seen, 1),
             mean_score,
-            detector.threshold,
+            threshold,
         )
     return outcome
 

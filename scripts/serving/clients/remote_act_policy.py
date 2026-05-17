@@ -18,7 +18,9 @@ from __future__ import annotations
 import io
 import json
 import logging
+import time
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Sequence
 
 import numpy as np
@@ -53,6 +55,7 @@ class RemoteACTPolicy:
         timeout_s: float = 5.0,
         jpeg_quality: int = 90,
         on_refill_failure: str = "hold",
+        prefetch_at_actions: int = 20,
     ) -> None:
         if on_refill_failure not in ("hold", "raise"):
             raise ValueError("on_refill_failure must be 'hold' or 'raise'")
@@ -70,32 +73,79 @@ class RemoteACTPolicy:
         self._timeout_s = timeout_s
         self._jpeg_quality = jpeg_quality
         self._on_refill_failure = on_refill_failure
+        self._prefetch_at_actions = prefetch_at_actions
 
         self._queue: deque[np.ndarray] = deque(maxlen=n_action_steps)
         self._session = requests.Session()
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._pending_refill: Future[list[np.ndarray]] | None = None
         # Telemetry counters — useful for tests and for logging from the runner.
         self.refill_calls = 0
         self.refill_failures = 0
+        self.refill_latency_ms: float | None = None
 
     def close(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=True)
         self._session.close()
 
     def reset(self) -> None:
         """Clear the action queue. Call between episodes."""
         self._queue.clear()
+        if self._pending_refill is not None:
+            self._pending_refill.cancel()
+            self._pending_refill = None
 
     def select_action(self, observation: dict) -> dict[str, float]:
         """Return one action. Refills queue from server when empty."""
+        self._finish_pending_refill_if_ready()
         if not self._queue:
-            self._refill(observation)
+            self._refill_blocking(observation)
         if not self._queue:
             # Refill failed and on_refill_failure="hold" — return current state
             # as the goal so the safety clamp on the robot produces no motion.
             return self._hold_action(observation)
         action_arr = self._queue.popleft()
+        if (
+            self._prefetch_at_actions > 0
+            and self._pending_refill is None
+            and 0 < len(self._queue) <= self._prefetch_at_actions
+        ):
+            self._pending_refill = self._executor.submit(self._request_actions, observation)
+            logger.debug("started remote ACT prefetch with %d queued actions", len(self._queue))
         return dict(zip(self._joint_order, (float(v) for v in action_arr)))
 
-    def _refill(self, observation: dict) -> None:
+    def _finish_pending_refill_if_ready(self) -> None:
+        if self._pending_refill is None or not self._pending_refill.done():
+            return
+        try:
+            actions = self._pending_refill.result()
+        except Exception as e:
+            self.refill_failures += 1
+            msg = f"/infer prefetch failed: {type(e).__name__}: {e}"
+            if self._on_refill_failure == "raise":
+                raise RuntimeError(msg) from e
+            logger.warning("%s — keeping existing queue", msg)
+        else:
+            self._queue.clear()
+            self._queue.extend(actions)
+            logger.debug("installed prefetched remote ACT chunk (%d actions)", len(actions))
+        finally:
+            self._pending_refill = None
+
+    def _refill_blocking(self, observation: dict) -> None:
+        try:
+            actions = self._request_actions(observation)
+        except Exception as e:
+            self.refill_failures += 1
+            msg = f"/infer call failed: {type(e).__name__}: {e}"
+            if self._on_refill_failure == "raise":
+                raise RuntimeError(msg) from e
+            logger.warning("%s — holding position", msg)
+            return
+        self._queue.clear()
+        self._queue.extend(actions)
+
+    def _request_actions(self, observation: dict) -> list[np.ndarray]:
         try:
             state_arr = np.fromiter(
                 (float(observation[k]) for k in self._joint_order),
@@ -131,36 +181,24 @@ class RemoteACTPolicy:
             headers["Authorization"] = f"Bearer {self._auth_token}"
 
         self.refill_calls += 1
-        try:
-            resp = self._session.post(
-                self._url, files=files, data=data,
-                headers=headers, timeout=self._timeout_s,
-            )
-            resp.raise_for_status()
-            body = resp.json()
-        except Exception as e:
-            self.refill_failures += 1
-            msg = f"/infer call failed: {type(e).__name__}: {e}"
-            if self._on_refill_failure == "raise":
-                raise RuntimeError(msg) from e
-            logger.warning("%s — holding position", msg)
-            return
+        start = time.perf_counter()
+        resp = self._session.post(
+            self._url, files=files, data=data,
+            headers=headers, timeout=self._timeout_s,
+        )
+        self.refill_latency_ms = (time.perf_counter() - start) * 1000.0
+        resp.raise_for_status()
+        body = resp.json()
 
         actions = body.get("action")
         if not isinstance(actions, list) or len(actions) < self._n_action_steps:
-            self.refill_failures += 1
-            msg = (
+            raise RuntimeError(
                 f"server returned malformed action (got "
                 f"{len(actions) if isinstance(actions, list) else type(actions).__name__}, "
                 f"expected list of {self._n_action_steps}+)"
             )
-            if self._on_refill_failure == "raise":
-                raise RuntimeError(msg)
-            logger.warning("%s — holding position", msg)
-            return
 
-        for action_arr in actions[: self._n_action_steps]:
-            self._queue.append(np.asarray(action_arr, dtype=np.float32))
+        return [np.asarray(action_arr, dtype=np.float32) for action_arr in actions[: self._n_action_steps]]
 
     def _hold_action(self, observation: dict) -> dict[str, float]:
         return {k: float(observation[k]) for k in self._joint_order}

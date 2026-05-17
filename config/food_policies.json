@@ -8,13 +8,13 @@
     },
     "oreo": {
       "display_name": "Oreo",
-      "policy_repo_id": "ofcourseistillloveyou/act-so101-strawberry-num40-chunk25",
+      "policy_repo_id": "ofcourseistillloveyou/act-so101-oreo-num40-chunk25",
       "task": "Pick up the Oreo and put it in the user's hand.",
       "ood_detector_path": "models/ood_detector_oreo.npz"
     },
     "marshmallow": {
       "display_name": "Marshmallow",
-      "policy_repo_id": "ofcourseistillloveyou/act-so101-strawberry-num40-chunk25",
+      "policy_repo_id": "ofcourseistillloveyou/act-so101-marshmellow-num40-chunk25",
       "task": "Pick up the Marshmallow and put it in the user's hand.",
       "ood_detector_path": "models/ood_detector_marshmallow.npz"
     }

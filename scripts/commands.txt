@@ -50,6 +50,15 @@ CAMERA_FPS=30 \
 DURATION=45 \
 ./scripts/run_policy_api_server.sh
 
+URL=http://154.54.100.64:8080/infer \
+ROBOT_PORT=/dev/cu.usbmodem5C4C1268491 \
+ROBOT_ID=so101_follower \
+CAMERA_FRONT_INDEX=0 \
+CAMERA_SIDE_INDEX=1 \
+MAX_RELATIVE_TARGET=5.0 \
+LOG_PATH=/tmp/remote-act.jsonl \
+./scripts/run_remote_act.sh
+
 
 
 uv run python scripts/fit_ood_detector.py \
