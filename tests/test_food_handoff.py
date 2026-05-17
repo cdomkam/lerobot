@@ -7,7 +7,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -32,6 +32,7 @@ targets = load_module("targets")
 tts = load_module("tts")
 stt = load_module("stt")
 vision = load_module("vision")
+openai_vision = load_module("openai_vision")
 
 
 class FakeResponse:
@@ -144,6 +145,71 @@ class FoodHandoffTest(unittest.TestCase):
 
         self.assertFalse(detector.update(frame, "strawberry").detected)
         self.assertTrue(detector.update(frame, "strawberry").detected)
+
+    def test_openai_vision_config_accepts_oai_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".env"
+            path.write_text("OAI_KEY=sk-test\nOPENAI_VISION_MODEL=gpt-test\n")
+
+            config = openai_vision.load_openai_vision_config(path)
+
+        self.assertEqual(config.api_key, "sk-test")
+        self.assertEqual(config.model, "gpt-test")
+
+    def test_openai_success_confirmation_uses_responses_api(self):
+        opener = Mock(
+            return_value=FakeResponse(
+                {
+                    "output": [
+                        {
+                            "content": [
+                                {
+                                    "text": json.dumps(
+                                        {
+                                            "user_hand_present": True,
+                                            "target_food_visible": True,
+                                            "target_food_in_user_hand": True,
+                                            "target_food_in_robot_gripper": False,
+                                            "target_food_on_tray": False,
+                                            "confidence": 0.91,
+                                            "reason": "target rests on the palm",
+                                        }
+                                    )
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        )
+        config = openai_vision.OpenAIVisionConfig(
+            api_key="key",
+            model="gpt-test",
+            api_base_url="https://example.test/v1",
+            min_confidence=0.7,
+        )
+        frame = np.full((20, 20, 3), 240, dtype=np.uint8)
+
+        with patch.object(
+            openai_vision,
+            "_frame_to_data_url",
+            return_value="data:image/jpeg;base64,abc",
+        ):
+            result = openai_vision.confirm_food_handoff_success(
+                config,
+                frame,
+                "Strawberry",
+                opener=opener,
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.confidence, 0.91)
+        request = opener.call_args.args[0]
+        self.assertEqual(request.full_url, "https://example.test/v1/responses")
+        self.assertEqual(request.headers["Authorization"], "Bearer key")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["model"], "gpt-test")
+        self.assertEqual(payload["input"][0]["content"][1]["type"], "input_image")
 
 
 if __name__ == "__main__":

@@ -3,19 +3,53 @@
 This branch contains the SO-101 helpers plus a voice-gated food handoff flow for
 Strawberry, Oreo, and Marshmallow policies.
 
-The handoff flow is the same in mock mode and robot mode:
+The handoff loop is the same in mock mode and robot mode:
 
-1. Wait for a hand in the camera frame.
+1. Wait for a hand in the scene camera frame.
 2. Record a short user request.
 3. Transcribe with ElevenLabs STT and classify the target policy.
 4. Run the selected food handoff policy.
-5. Detect success or OOD.
-6. Speak the outcome with ElevenLabs TTS.
-7. Pause so the hand can leave the frame, then repeat.
+5. Score OOD from camera frames while the policy runs.
+6. Detect placement success from the scene camera.
+7. Optionally confirm success with OpenAI vision.
+8. Speak the outcome with ElevenLabs TTS.
+9. Pause so the hand can leave the frame, then repeat.
 
-Robot mode repeats until interrupted by default. Test mode runs one cycle by
-default, so local commands finish; use `--max-cycles N` to test multiple cycles
-or `--max-cycles 0` for an unlimited loop.
+The normal robot path uses local OpenCV detectors for hand entry and placement
+success. OpenAI vision is optional and is used only as a post-policy success
+confirmation; it is not in the tight robot action loop.
+
+## Full Loop
+
+The runtime is `scripts/run_food_handoff.sh`, which launches
+`scripts/run_food_handoff.py`.
+
+- **Hand gate:** `config/food_handoff_vision.json` opens OpenCV camera index `1`
+  and watches the configured `hand.roi`. It builds a short empty-scene baseline,
+  then triggers when enough pixels in that ROI change for enough consecutive
+  frames.
+- **Speech request:** the runner records a short microphone clip, sends it to
+  ElevenLabs STT, and classifies the transcript as `strawberry`, `oreo`, or
+  `marshmallow`. Debug runs can bypass this with `--no-stt --target strawberry`.
+- **Policy selection:** `config/food_policies.json` maps the classified food to
+  a Hugging Face policy repo, task prompt, and per-target OOD detector.
+- **Policy execution:** the selected LeRobot policy runs on SO-101 for
+  `DURATION` seconds or until success is detected.
+- **OOD scoring:** the ACT backbone encoder scores the configured `OOD_CAMERA`
+  against the target detector `.npz`. OOD events are logged and can trigger
+  ElevenLabs voice alerts, but they do not stop the policy.
+- **Success detection:** the local ROI/color detector watches named camera
+  `side`, which maps to `CAMERA_SIDE_INDEX=1`. This is the scene camera in the
+  current setup.
+- **OpenAI confirmation:** when `OPENAI_SUCCESS_ENABLED=true`, an OpenCV success
+  candidate is sent to `gpt-5.4-nano` using the side-camera frame. The loop only
+  accepts success if the model says the target food is in the user's hand with
+  at least `OPENAI_SUCCESS_MIN_CONFIDENCE` from `.env` (default `0.70`). If the
+  API request fails, the runner logs a warning and falls back to the OpenCV
+  success result.
+- **Reset/repeat:** robot mode loops until interrupted by default. Test mode
+  runs one cycle by default. Use `--max-cycles N` to bound either mode, or
+  `--max-cycles 0` for an unlimited loop.
 
 ## Setup
 
@@ -37,6 +71,16 @@ text-to-speech output. Speech-to-text uses ElevenLabs `scribe_v2` internally,
 because the STT endpoint accepts Scribe models rather than TTS models such as
 `eleven_v3`.
 
+Optional OpenAI success confirmation uses the same `.env` file:
+
+```bash
+OAI_KEY=...
+OPENAI_VISION_MODEL=gpt-5.4-nano
+OPENAI_SUCCESS_MIN_CONFIDENCE=0.70
+```
+
+`OPENAI_API_KEY` is also accepted if you prefer that name.
+
 For robot execution, this branch expects a latest LeRobot checkout at
 `vendor/lerobot-main`:
 
@@ -44,98 +88,164 @@ For robot execution, this branch expects a latest LeRobot checkout at
 ./scripts/update_lerobot_latest.sh
 ```
 
-## Mocked Local Test
+## Test Views
 
-Use `--test-mode` to run the handoff flow without connecting to SO-101, without
-loading LeRobot rollout code, and without requiring policy checkpoints or OOD
-detector files. It still exercises ElevenLabs STT, target classification, policy
-selection, success/OOD handling, and ElevenLabs TTS by default.
+Use these four views for normal testing. In all cases, speech input and
+ElevenLabs speech output are enabled by default.
 
-Run one mocked cycle from a recorded voice request:
+### 1. Test One Item, No Robot
 
-```bash
-./scripts/run_food_handoff.sh \
-  --test-mode \
-  --test-audio recordings/voice_requests/strawberry_request.wav
-```
+Use `--test-mode` with a recorded request clip. This does not connect to SO-101,
+does not load LeRobot rollout code, and does not require policy checkpoints or
+OOD detector files. It still exercises ElevenLabs STT, target classification,
+policy selection, mocked success/OOD handling, and ElevenLabs TTS.
 
-Other recorded request clips:
+Strawberry:
 
 ```bash
 ./scripts/run_food_handoff.sh \
   --test-mode \
-  --test-audio recordings/voice_requests/oreo_request.wav
-
-./scripts/run_food_handoff.sh \
-  --test-mode \
-  --test-audio recordings/voice_requests/marshmallow_request.wav
+  --test-audio recordings/voice_requests/strawberry_request.wav \
+  --max-cycles 1
 ```
 
-Run multiple mocked cycles with speech input and output enabled. The reset pause
-gives the previous hand time to leave the frame:
+Oreo:
 
 ```bash
 ./scripts/run_food_handoff.sh \
   --test-mode \
   --test-audio recordings/voice_requests/oreo_request.wav \
-  --max-cycles 3 --reset-pause-s 7
+  --max-cycles 1
 ```
 
-Debug-only overrides, when you explicitly do not want audio:
+Marshmallow:
 
 ```bash
-./scripts/run_food_handoff.sh --test-mode --no-voice --test-audio recordings/voice_requests/oreo_request.wav
-./scripts/run_food_handoff.sh --test-mode --no-voice --no-stt --target marshmallow
+./scripts/run_food_handoff.sh \
+  --test-mode \
+  --test-audio recordings/voice_requests/marshmallow_request.wav \
+  --max-cycles 1
 ```
 
-Expected successful mock logs include:
+### 2. Test One Item, With Robot
 
-```text
-[CYCLE] start cycle=1
-[HAND] mocked present
-[REQUEST] test_audio=... transcript='Please put the strawberry in my hand' target=strawberry
-[REQUEST] target=strawberry policy=...
-[POLICY] mocked starting target=strawberry ...
-[MOCK_ACTION] frame=1 target=strawberry
-[TASK_SUCCESS] target=strawberry frame=3 confidence=1.000 mocked_success=true
-Run complete: target=strawberry success=True ... test_mode=true
-[CYCLE] complete cycle=1 outcome=success
+Preconfiguration:
+
+- Confirm `vendor/lerobot-main` exists. If not, run
+  `./scripts/update_lerobot_latest.sh`.
+- Confirm `config/food_policies.json` has the target policy repo id and
+  `ood_detector_path`.
+- Confirm the target OOD detector exists locally, for example
+  `models/ood_detector_strawberry.npz`.
+- Confirm `config/food_handoff_vision.json` uses the scene camera:
+  `hand.camera_index=1` and success camera `side`.
+- Keep one hand near power/USB for the first robot run.
+
+Run one robot cycle and say "strawberry" during the request recording window:
+
+```bash
+./scripts/run_food_handoff.sh \
+  --max-cycles 1 \
+  --reset-pause-s 5
 ```
 
-## Robot Handoff
+Optional OpenAI success confirmation:
 
-Review the checked-in runtime configs:
+```bash
+OPENAI_SUCCESS_ENABLED=true \
+./scripts/run_food_handoff.sh \
+  --max-cycles 1 \
+  --reset-pause-s 5
+```
 
-- `config/food_policies.json` with the Strawberry, Oreo, and Marshmallow policy
-  repo ids and any per-target OOD detector paths.
-- `config/food_handoff_vision.json` with the scene-camera hand ROI, success ROI,
-  and color thresholds for the camera setup.
-- `.env` with ElevenLabs credentials.
+### 3. Test A Set Of Items, No Robot
 
-Run the same flow against the robot by removing `--test-mode`:
+Test mode takes one recorded request clip at a time. To test a set, run one
+command per item. This example tests Strawberry and Oreo with a five-second reset
+pause configured on each command:
+
+```bash
+./scripts/run_food_handoff.sh \
+  --test-mode \
+  --test-audio recordings/voice_requests/strawberry_request.wav \
+  --max-cycles 1 \
+  --reset-pause-s 5
+
+./scripts/run_food_handoff.sh \
+  --test-mode \
+  --test-audio recordings/voice_requests/oreo_request.wav \
+  --max-cycles 1 \
+  --reset-pause-s 5
+```
+
+To stress repeated reset behavior for one item, increase `--max-cycles`:
+
+```bash
+./scripts/run_food_handoff.sh \
+  --test-mode \
+  --test-audio recordings/voice_requests/strawberry_request.wav \
+  --max-cycles 3 \
+  --reset-pause-s 5
+```
+
+### 4. Test A Set Of Items, With Robot
+
+Preconfiguration is the same as the one-item robot test, but every requested
+item must have a valid policy repo id and local OOD detector in
+`config/food_policies.json`.
+
+Run two robot cycles and request Strawberry during the first cycle, then
+Marshmallow during the second cycle:
+
+```bash
+./scripts/run_food_handoff.sh \
+  --max-cycles 2 \
+  --reset-pause-s 5
+```
+
+With OpenAI success confirmation:
+
+```bash
+OPENAI_SUCCESS_ENABLED=true \
+./scripts/run_food_handoff.sh \
+  --max-cycles 2 \
+  --reset-pause-s 5
+```
+
+For an unattended continuous robot loop, omit `--max-cycles` and stop with
+Ctrl-C:
 
 ```bash
 ./scripts/run_food_handoff.sh
 ```
 
-That command uses speech input and speech output, loops until Ctrl-C, and waits
-`RESET_PAUSE_S=7` seconds between cycles so the previous hand can move out of
-frame.
+Expected successful logs include:
 
-Run one real handoff:
-
-```bash
-./scripts/run_food_handoff.sh --max-cycles 1
+```text
+[CYCLE] start cycle=1
+[HAND] present
+[REQUEST] transcript='Please put the strawberry in my hand' target=strawberry
+[REQUEST] target=strawberry policy=...
+[POLICY] starting target=strawberry ...
+[TASK_SUCCESS] target=strawberry frame=... confidence=...
+[CYCLE] complete cycle=1 outcome=success
 ```
 
-Adjust the hand reset pause:
+Debug-only override: `--no-stt --target strawberry` bypasses microphone/STT and
+forces one target. The normal path uses speech input and output.
+
+Useful robot-mode environment knobs:
 
 ```bash
-./scripts/run_food_handoff.sh --reset-pause-s 10
+CAMERA_SIDE_INDEX=1              # scene camera used for hand and success
+CAMERA_FRONT_INDEX=0             # on-robot/front camera, used by OOD by default
+OOD_CAMERA=front
+OPENAI_SUCCESS_ENABLED=false     # set true to confirm OpenCV success candidates
+OPENAI_SUCCESS_CONFIG_PATH=.env
+OPENAI_SUCCESS_EVERY_N=15        # minimum frames between OpenAI confirmation calls
+DURATION=30
+HAND_WAIT_TIMEOUT_S=0
 ```
-
-Debug-only overrides are available as `--no-voice` and `--no-stt --target ...`,
-but the normal path uses speech input and output.
 
 ## Smoke Tests
 
@@ -173,13 +283,7 @@ uv run python scripts/extract_handoff_fixtures.py \
 
 ## OOD Policy Wrapper
 
-Run the current OOD wrapper without voice:
-
-```bash
-DURATION=15 OOD_LOG_IN_DIST_EVERY_N=30 ./scripts/run_policy_with_ood.sh --no-voice
-```
-
-Run with ElevenLabs OOD voice alerts:
+Run the current OOD wrapper with ElevenLabs OOD voice alerts:
 
 ```bash
 ./scripts/run_policy_with_ood.sh

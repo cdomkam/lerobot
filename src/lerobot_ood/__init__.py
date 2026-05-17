@@ -13,6 +13,12 @@ from .act_encoder import ACTBackboneEncoder
 from .detector import OODDetector, OODResult
 from .encoder import DinoV2Encoder
 from .obs import extract_camera_frame
+from .openai_vision import (
+    OpenAISuccessResult,
+    OpenAIVisionConfig,
+    confirm_food_handoff_success,
+    load_openai_vision_config,
+)
 from .stt import ElevenLabsSTTConfig, load_elevenlabs_stt_config, transcribe_audio_file
 from .targets import (
     TARGETS,
@@ -49,6 +55,10 @@ __all__ = [
     "ACTBackboneEncoder",
     "DinoV2Encoder",
     "extract_camera_frame",
+    "OpenAISuccessResult",
+    "OpenAIVisionConfig",
+    "confirm_food_handoff_success",
+    "load_openai_vision_config",
     "TARGETS",
     "FoodPolicy",
     "FoodPolicyConfig",

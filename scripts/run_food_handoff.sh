@@ -84,6 +84,9 @@ OOD_TTS_ENABLED="${OOD_TTS_ENABLED:-true}"
 OOD_TTS_CONFIG_PATH="${OOD_TTS_CONFIG_PATH:-.env}"
 OOD_TTS_EVERY_N="${OOD_TTS_EVERY_N:-30}"
 OOD_TTS_QUEUE_MAX="${OOD_TTS_QUEUE_MAX:-25}"
+OPENAI_SUCCESS_ENABLED="${OPENAI_SUCCESS_ENABLED:-false}"
+OPENAI_SUCCESS_CONFIG_PATH="${OPENAI_SUCCESS_CONFIG_PATH:-.env}"
+OPENAI_SUCCESS_EVERY_N="${OPENAI_SUCCESS_EVERY_N:-15}"
 STT_ENABLED="${STT_ENABLED:-true}"
 REQUEST_AUDIO_SECONDS="${REQUEST_AUDIO_SECONDS:-3}"
 REQUEST_AUDIO_SAMPLE_RATE="${REQUEST_AUDIO_SAMPLE_RATE:-16000}"
@@ -120,7 +123,7 @@ CAMERA_SIDE_INDEX="${CAMERA_SIDE_INDEX:-1}"
 CAMERA_WIDTH="${CAMERA_WIDTH:-640}"
 CAMERA_HEIGHT="${CAMERA_HEIGHT:-480}"
 
-for path_var in FOOD_POLICY_CONFIG VISION_CONFIG OOD_DETECTOR_PATH OOD_TTS_CONFIG_PATH; do
+for path_var in FOOD_POLICY_CONFIG VISION_CONFIG OOD_DETECTOR_PATH OOD_TTS_CONFIG_PATH OPENAI_SUCCESS_CONFIG_PATH; do
   value="${!path_var}"
   if [[ "${value}" != /* ]]; then
     printf -v "${path_var}" '%s/%s' "${ROOT_DIR}" "${value}"
@@ -188,6 +191,7 @@ echo "Vision config:   ${VISION_CONFIG}"
 echo "Policy device:   ${POLICY_DEVICE}"
 echo "Bootstrap policy:${BOOTSTRAP_POLICY_REPO_ID}"
 echo "OOD detector:    ${OOD_DETECTOR_PATH}"
+echo "OpenAI success:  ${OPENAI_SUCCESS_ENABLED}"
 echo "Voice enabled:   ${OOD_TTS_ENABLED}"
 echo "STT enabled:     ${STT_ENABLED}"
 echo "Target override: ${TARGET:-none}"
@@ -255,6 +259,9 @@ exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --ood_tts_config_path="${OOD_TTS_CONFIG_PATH}" \
   --ood_tts_every_n="${OOD_TTS_EVERY_N}" \
   --ood_tts_queue_max="${OOD_TTS_QUEUE_MAX}" \
+  --openai_success_enabled="${OPENAI_SUCCESS_ENABLED}" \
+  --openai_success_config_path="${OPENAI_SUCCESS_CONFIG_PATH}" \
+  --openai_success_every_n="${OPENAI_SUCCESS_EVERY_N}" \
   --test_mode="${TEST_MODE}" \
   --test_audio_path="${TEST_AUDIO_PATH}" \
   --max_cycles="${MAX_CYCLES}" \

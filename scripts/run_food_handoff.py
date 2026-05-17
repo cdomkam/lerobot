@@ -33,9 +33,11 @@ from lerobot_ood import (
     choose_success_phrase,
     classify_food_request,
     extract_camera_frame,
+    confirm_food_handoff_success,
     load_elevenlabs_stt_config,
     load_elevenlabs_tts_config,
     load_food_policy_config,
+    load_openai_vision_config,
     load_vision_config,
     transcribe_audio_file,
 )
@@ -65,6 +67,9 @@ class FoodHandoffConfig(RolloutConfig):
     ood_tts_config_path: str = ".env"
     ood_tts_every_n: int = 30
     ood_tts_queue_max: int = 25
+    openai_success_enabled: bool = False
+    openai_success_config_path: str = ".env"
+    openai_success_every_n: int = 15
     test_mode: bool = False
     test_audio_path: str = ""
     max_cycles: int = 0
@@ -84,9 +89,20 @@ def main(cfg: FoodHandoffConfig) -> None:
         raise ValueError("--max_cycles must be >= 0")
     if cfg.reset_pause_s < 0:
         raise ValueError("--reset_pause_s must be >= 0")
+    if cfg.openai_success_every_n <= 0:
+        raise ValueError("--openai_success_every_n must be positive")
 
     policy_config = load_food_policy_config(cfg.food_policy_config)
     vision_config = load_vision_config(cfg.vision_config)
+
+    openai_success_config = None
+    if cfg.openai_success_enabled:
+        openai_success_config = load_openai_vision_config(cfg.openai_success_config_path)
+        logger.info(
+            "OpenAI success confirmation enabled (model=%s, min_confidence=%.2f)",
+            openai_success_config.model,
+            openai_success_config.min_confidence,
+        )
 
     tts_worker = None
     tts_config = None
@@ -205,6 +221,7 @@ def main(cfg: FoodHandoffConfig) -> None:
                 tts_worker=tts_worker,
                 shutdown_event=shutdown_event,
                 vision_config=vision_config,
+                openai_success_config=openai_success_config,
             )
             logger.info("[CYCLE] complete cycle=%d outcome=%s", cycle, outcome)
             if outcome == "interrupted":
@@ -320,6 +337,7 @@ def run_selected_policy(
     tts_worker: ElevenLabsTTSWorker | None,
     shutdown_event,
     vision_config,
+    openai_success_config=None,
 ) -> str:
     robot = ctx.hardware.robot_wrapper
     processors = ctx.processors
@@ -332,6 +350,7 @@ def run_selected_policy(
     sum_score = 0.0
     success = False
     success_frame = 0
+    last_openai_success_check_frame = -cfg.openai_success_every_n
     outcome = "timeout"
 
     engine.reset()
@@ -399,19 +418,59 @@ def run_selected_policy(
                 success_frame_raw = extract_camera_frame(obs_raw, vision_config.success.camera_name)
             success_result = success_detector.update(success_frame_raw, selected_policy.target)
             if success_result.detected:
-                success = True
-                success_frame = n_seen
-                outcome = "success"
-                logger.info(
-                    "[TASK_SUCCESS] target=%s frame=%d confidence=%.3f %s",
-                    selected_policy.target,
-                    success_frame,
-                    success_result.score,
-                    success_result.reason,
-                )
-                phrase = choose_success_phrase(selected_policy.display_name)
-                speak(tts_worker, phrase, wait=True)
-                break
+                success_confirmed = True
+                if openai_success_config is not None:
+                    if n_seen - last_openai_success_check_frame < cfg.openai_success_every_n:
+                        success_confirmed = False
+                    else:
+                        last_openai_success_check_frame = n_seen
+                        try:
+                            openai_result = confirm_food_handoff_success(
+                                openai_success_config,
+                                success_frame_raw,
+                                selected_policy.display_name,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "[OPENAI_SUCCESS] confirmation failed; accepting OpenCV success: %s",
+                                exc,
+                            )
+                        else:
+                            logger.info(
+                                "[OPENAI_SUCCESS] success=%s confidence=%.3f hand=%s visible=%s "
+                                "in_gripper=%s on_tray=%s reason=%r",
+                                openai_result.success,
+                                openai_result.confidence,
+                                openai_result.user_hand_present,
+                                openai_result.target_food_visible,
+                                openai_result.target_food_in_robot_gripper,
+                                openai_result.target_food_on_tray,
+                                openai_result.reason,
+                            )
+                            success_confirmed = openai_result.success
+                            if not success_confirmed:
+                                logger.info(
+                                    "[TASK_SUCCESS_CANDIDATE_REJECTED] target=%s frame=%d "
+                                    "opencv_score=%.3f openai_confidence=%.3f",
+                                    selected_policy.target,
+                                    n_seen,
+                                    success_result.score,
+                                    openai_result.confidence,
+                                )
+                if success_confirmed:
+                    success = True
+                    success_frame = n_seen
+                    outcome = "success"
+                    logger.info(
+                        "[TASK_SUCCESS] target=%s frame=%d confidence=%.3f %s",
+                        selected_policy.target,
+                        success_frame,
+                        success_result.score,
+                        success_result.reason,
+                    )
+                    phrase = choose_success_phrase(selected_policy.display_name)
+                    speak(tts_worker, phrase, wait=True)
+                    break
 
             dt = time.perf_counter() - loop_start
             sleep_t = control_interval - dt
