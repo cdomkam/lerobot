@@ -53,6 +53,7 @@ ipython_config.py
 
 ### LeRobot Local Artifacts ###
 config/food_policies.json
+config/robot_neutral.json
 models/
 data/
 datasets/

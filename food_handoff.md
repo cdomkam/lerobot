@@ -25,6 +25,8 @@ Review the checked-in runtime configs:
 - `config/food_handoff_vision.json` with camera ROI and color thresholds. The
   current config uses camera index 1 / `side` for placement success because
   that scene view shows the food-in-hand state most clearly.
+- Local ignored `config/robot_neutral.json` with the operator-approved SO-101
+  neutral action. The runtime uses it after robot-motion terminal states.
 - `.env` with `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, and
   `ELEVENLABS_MODEL_ID` for text-to-speech.
 
@@ -107,8 +109,11 @@ Debug-only overrides are available as `--no-voice` and
 7. `OOD`: OOD is enabled by default. Detector hits are logged. After
    `OOD_FAILURE_AFTER_N` detections, default 3, the loop speaks an OOD phrase,
    returns `ood_failure`, stops the current policy, and proceeds to reset.
-8. `RESET_PAUSE`: Wait 5-10 seconds, default 7, so the scene can be reset.
-9. Return to `LISTEN` unless the max cycle count was reached or the process was
+8. `NEUTRAL_RESET`: For robot-motion terminal states, move SO-101 toward the
+   local neutral pose using `robot.send_action`. Unsupported or unclassified text
+   requests skip this because no policy ran.
+9. `RESET_PAUSE`: Wait 5-10 seconds, default 7, so the scene can be reset.
+10. Return to `LISTEN` unless the max cycle count was reached or the process was
    interrupted.
 
 ## Logs
@@ -124,6 +129,8 @@ Expected log markers:
 [OOD] frame=87 score=34.219 threshold=21.080
 [OPENAI_SUCCESS] frame=... sequence_frames=5 success=True confidence=...
 [TASK_SUCCESS] target=oreo frame=342 source=openai opencv_score=...
+[NEUTRAL_RESET] starting outcome=success config=...
+[NEUTRAL_RESET] complete steps=90
 Run complete: target=oreo success=True success_frame=342 ...
 [CYCLE] complete cycle=1 outcome=success
 [CYCLE] reset pause 7.0s; reset the scene before the next cycle

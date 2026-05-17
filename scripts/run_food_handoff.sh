@@ -93,6 +93,10 @@ OPENAI_SUCCESS_EVERY_N="${OPENAI_SUCCESS_EVERY_N:-15}"
 OPENAI_SUCCESS_SEQUENCE_FRAMES="${OPENAI_SUCCESS_SEQUENCE_FRAMES:-5}"
 OPENAI_SUCCESS_SEQUENCE_STRIDE="${OPENAI_SUCCESS_SEQUENCE_STRIDE:-5}"
 OPENAI_SUCCESS_GRACE_S="${OPENAI_SUCCESS_GRACE_S:-15}"
+ROBOT_NEUTRAL_RESET_ENABLED="${ROBOT_NEUTRAL_RESET_ENABLED:-true}"
+ROBOT_NEUTRAL_CONFIG="${ROBOT_NEUTRAL_CONFIG:-config/robot_neutral.json}"
+ROBOT_NEUTRAL_RESET_DURATION_S="${ROBOT_NEUTRAL_RESET_DURATION_S:-3.0}"
+ROBOT_NEUTRAL_RESET_FPS="${ROBOT_NEUTRAL_RESET_FPS:-30}"
 RESULT_JSON_PATH="${RESULT_JSON_PATH:-}"
 STT_ENABLED="${STT_ENABLED:-true}"
 REQUEST_AUDIO_SECONDS="${REQUEST_AUDIO_SECONDS:-3}"
@@ -203,6 +207,8 @@ echo "OOD fail after:  ${OOD_FAILURE_AFTER_N}"
 echo "OpenAI success:  ${OPENAI_SUCCESS_ENABLED}"
 echo "OpenAI sequence: ${OPENAI_SUCCESS_SEQUENCE_FRAMES} frame(s), stride ${OPENAI_SUCCESS_SEQUENCE_STRIDE}"
 echo "OpenAI grace:    ${OPENAI_SUCCESS_GRACE_S}s"
+echo "Neutral reset:   ${ROBOT_NEUTRAL_RESET_ENABLED}"
+echo "Neutral config:  ${ROBOT_NEUTRAL_CONFIG}"
 echo "Voice enabled:   ${OOD_TTS_ENABLED}"
 echo "STT enabled:     ${STT_ENABLED}"
 echo "Target override: ${TARGET:-none}"
@@ -282,6 +288,10 @@ exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --openai_success_sequence_frames="${OPENAI_SUCCESS_SEQUENCE_FRAMES}" \
   --openai_success_sequence_stride="${OPENAI_SUCCESS_SEQUENCE_STRIDE}" \
   --openai_success_grace_s="${OPENAI_SUCCESS_GRACE_S}" \
+  --robot_neutral_reset_enabled="${ROBOT_NEUTRAL_RESET_ENABLED}" \
+  --robot_neutral_config="${ROBOT_NEUTRAL_CONFIG}" \
+  --robot_neutral_reset_duration_s="${ROBOT_NEUTRAL_RESET_DURATION_S}" \
+  --robot_neutral_reset_fps="${ROBOT_NEUTRAL_RESET_FPS}" \
   --test_mode="${TEST_MODE}" \
   --test_audio_path="${TEST_AUDIO_PATH}" \
   --max_cycles="${MAX_CYCLES}" \

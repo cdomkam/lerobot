@@ -254,12 +254,15 @@ class ElevenLabsTTSWorker:
             self._thread.start()
             self._started = True
 
-    def speak(self, text: str) -> bool:
-        """Queue text for speech. Returns ``False`` if the queue is full."""
+    def speak(self, text: str, block: bool = False, timeout: float | None = None) -> bool:
+        """Queue text for speech. Returns ``False`` if the queue cannot accept it."""
         if not self._started:
             self.start()
         try:
-            self._queue.put_nowait(text)
+            if block:
+                self._queue.put(text, block=True, timeout=timeout)
+            else:
+                self._queue.put_nowait(text)
         except queue.Full:
             return False
         return True

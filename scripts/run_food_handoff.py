@@ -38,12 +38,15 @@ from lerobot_ood import (
     classify_food_request,
     extract_camera_frame,
     confirm_food_handoff_success,
+    interpolate_neutral_actions,
     is_probable_unsupported_food_request,
     load_elevenlabs_stt_config,
     load_elevenlabs_tts_config,
     load_food_policy_config,
+    load_neutral_reset_config,
     load_openai_vision_config,
     load_vision_config,
+    SO101_NEUTRAL_ACTION_KEYS,
     transcribe_audio_file,
     unsupported_item_label,
 )
@@ -85,6 +88,10 @@ class FoodHandoffConfig(RolloutConfig):
     test_audio_path: str = ""
     max_cycles: int = 0
     reset_pause_s: float = 7.0
+    robot_neutral_reset_enabled: bool = True
+    robot_neutral_config: str = "config/robot_neutral.json"
+    robot_neutral_reset_duration_s: float = 3.0
+    robot_neutral_reset_fps: int = 30
     result_json_path: str = ""
     test_policy_steps: int = 5
     test_success_after_steps: int = 3
@@ -109,6 +116,10 @@ def main(cfg: FoodHandoffConfig) -> None:
         raise ValueError("--max_cycles must be >= 0")
     if cfg.reset_pause_s < 0:
         raise ValueError("--reset_pause_s must be >= 0")
+    if cfg.robot_neutral_reset_duration_s < 0:
+        raise ValueError("--robot_neutral_reset_duration_s must be >= 0")
+    if cfg.robot_neutral_reset_fps <= 0:
+        raise ValueError("--robot_neutral_reset_fps must be positive")
     if cfg.openai_success_every_n <= 0:
         raise ValueError("--openai_success_every_n must be positive")
     if cfg.openai_success_sequence_frames <= 0:
@@ -409,6 +420,41 @@ def reset_between_cycles(cfg: FoodHandoffConfig, cycle: int) -> None:
         cfg.reset_pause_s,
     )
     time.sleep(cfg.reset_pause_s)
+
+
+def reset_robot_to_neutral(cfg: FoodHandoffConfig, robot, processors, outcome: str, n_actions: int) -> None:
+    if not cfg.robot_neutral_reset_enabled:
+        logger.info("[NEUTRAL_RESET] disabled")
+        return
+    if outcome == "interrupted":
+        logger.info("[NEUTRAL_RESET] skipped after interrupted run")
+        return
+    if n_actions <= 0:
+        logger.info("[NEUTRAL_RESET] skipped; no robot actions were sent")
+        return
+
+    config_path = resolve_config_path(cfg.robot_neutral_config, cfg.food_policy_config)
+    logger.info("[NEUTRAL_RESET] starting outcome=%s config=%s", outcome, config_path)
+    try:
+        neutral_config = load_neutral_reset_config(config_path)
+        obs_raw = robot.get_observation()
+        current = {key: float(obs_raw[key]) for key in SO101_NEUTRAL_ACTION_KEYS}
+        steps = max(
+            1,
+            int(round(cfg.robot_neutral_reset_duration_s * cfg.robot_neutral_reset_fps)),
+        )
+        control_interval = 1.0 / cfg.robot_neutral_reset_fps
+        for action_dict in interpolate_neutral_actions(current, neutral_config.action, steps):
+            loop_start = time.perf_counter()
+            obs_raw = robot.get_observation()
+            processed_action = processors.robot_action_processor((action_dict, obs_raw))
+            robot.send_action(processed_action)
+            sleep_t = control_interval - (time.perf_counter() - loop_start)
+            if sleep_t > 0:
+                precise_sleep(sleep_t)
+        logger.info("[NEUTRAL_RESET] complete steps=%d", steps)
+    except Exception as exc:
+        logger.warning("[NEUTRAL_RESET] failed: %s", exc)
 
 
 def score_ood_frame(detector: OODDetector, encoder, frame) -> object:
@@ -728,6 +774,7 @@ def run_selected_policy(
         if ood_executor is not None:
             ood_executor.shutdown(wait=False, cancel_futures=True)
         engine.stop()
+        reset_robot_to_neutral(cfg, robot, processors, outcome, n_actions)
         inner_robot = robot.inner
         if inner_robot.is_connected:
             inner_robot.disconnect()
@@ -804,7 +851,7 @@ def speak(worker: ElevenLabsTTSWorker | None, phrase: str, wait: bool = False) -
         logger.info("[TTS] disabled; skipping phrase=%r", phrase)
         return
     logger.info("[TTS] queue wait=%s phrase=%r", wait, phrase)
-    if not worker.speak(phrase):
+    if not worker.speak(phrase, block=wait, timeout=30.0 if wait else None):
         logger.warning("TTS queue full; dropping voice phrase")
         return
     if wait and not worker.wait_until_idle(timeout=30.0):

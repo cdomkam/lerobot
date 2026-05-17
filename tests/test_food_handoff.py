@@ -33,6 +33,7 @@ tts = load_module("tts")
 stt = load_module("stt")
 vision = load_module("vision")
 openai_vision = load_module("openai_vision")
+neutral_reset = load_module("neutral_reset")
 
 
 class FakeResponse:
@@ -132,6 +133,46 @@ class FoodHandoffTest(unittest.TestCase):
 
         self.assertEqual(config.success.camera_name, "side")
 
+    def test_neutral_reset_config_requires_all_joint_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "neutral.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "action": {
+                            "shoulder_pan.pos": 0,
+                            "shoulder_lift.pos": 1,
+                            "elbow_flex.pos": 2,
+                            "wrist_flex.pos": 3,
+                            "wrist_roll.pos": 4,
+                            "gripper.pos": 50,
+                        }
+                    }
+                )
+            )
+
+            config = neutral_reset.load_neutral_reset_config(path)
+
+        self.assertEqual(config.action["gripper.pos"], 50.0)
+
+    def test_neutral_reset_config_rejects_missing_joint_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "neutral.json"
+            path.write_text(json.dumps({"action": {"shoulder_pan.pos": 0}}))
+
+            with self.assertRaisesRegex(ValueError, "missing keys"):
+                neutral_reset.load_neutral_reset_config(path)
+
+    def test_interpolate_neutral_actions_reaches_target(self):
+        current = {key: 0.0 for key in neutral_reset.SO101_NEUTRAL_ACTION_KEYS}
+        target = {key: 10.0 for key in neutral_reset.SO101_NEUTRAL_ACTION_KEYS}
+
+        actions = neutral_reset.interpolate_neutral_actions(current, target, steps=4)
+
+        self.assertEqual(len(actions), 4)
+        self.assertEqual(actions[0]["shoulder_pan.pos"], 2.5)
+        self.assertEqual(actions[-1], target)
+
     def test_success_detector_debounces_target_color(self):
         config = vision.SuccessVisionConfig(
             roi=(0, 0, 1, 1),
@@ -225,6 +266,7 @@ class FoodHandoffTest(unittest.TestCase):
         self.assertEqual(payload["input"][0]["content"][3]["type"], "input_image")
         self.assertIn("ordered from oldest to newest", payload["input"][0]["content"][0]["text"])
         self.assertIn("user appears to have grabbed", payload["input"][0]["content"][0]["text"])
+        self.assertIn("board, tray", payload["input"][0]["content"][0]["text"])
 
     def test_openai_success_requires_robot_placement(self):
         opener = Mock(

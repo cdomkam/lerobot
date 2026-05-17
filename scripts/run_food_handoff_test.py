@@ -162,7 +162,7 @@ def speak(worker: ElevenLabsTTSWorker | None, phrase: str, wait: bool = False) -
         logger.info("[TTS] disabled; skipping phrase=%r", phrase)
         return
     logger.info("[TTS] queue wait=%s phrase=%r", wait, phrase)
-    if not worker.speak(phrase):
+    if not worker.speak(phrase, block=wait, timeout=30.0 if wait else None):
         logger.warning("TTS queue full; dropping voice phrase")
         return
     if wait and not worker.wait_until_idle(timeout=30.0):

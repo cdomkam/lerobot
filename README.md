@@ -71,6 +71,11 @@ for the actual robot cycle.
   `DURATION` seconds or until success is detected. After `DURATION`, the robot
   stops sending actions and the loop keeps checking side-camera success for
   `OPENAI_SUCCESS_GRACE_S` seconds before returning timeout.
+- **Neutral reset:** after robot-motion terminal states such as success, visual
+  OOD failure, timeout, or policy failure, the runner attempts to move SO-101 to
+  the local neutral pose from `config/robot_neutral.json` before the next voice
+  request can trigger a policy. Unsupported or unclassified text requests skip
+  physical reset because no robot action ran.
 - **OOD scoring:** enabled by default. The ACT backbone encoder scores the
   configured `OOD_CAMERA` against the selected target's detector `.npz` from
   `config/food_policies.json`. OOD events are logged and can trigger ElevenLabs
@@ -185,6 +190,20 @@ Preconfiguration:
   `models/ood_detector_strawberry.npz`.
 - Confirm `config/food_handoff_vision.json` uses the scene camera for success:
   `success.camera_name=side`.
+- Create local ignored `config/robot_neutral.json` with the operator-approved
+  neutral pose for this robot:
+  ```json
+  {
+    "action": {
+      "shoulder_pan.pos": 0.0,
+      "shoulder_lift.pos": 0.0,
+      "elbow_flex.pos": 0.0,
+      "wrist_flex.pos": 0.0,
+      "wrist_roll.pos": 0.0,
+      "gripper.pos": 50.0
+    }
+  }
+  ```
 - Keep power/USB within reach for the first robot run.
 
 Run the Realtime robot loop and ask for any configured food, for example
@@ -284,6 +303,10 @@ OPENAI_SUCCESS_EVERY_N=15        # minimum frames between OpenAI confirmation ca
 OPENAI_SUCCESS_SEQUENCE_FRAMES=5 # number of side-camera frames sent per check
 OPENAI_SUCCESS_SEQUENCE_STRIDE=5 # frame spacing inside the success sequence
 OPENAI_SUCCESS_GRACE_S=15        # post-action window for pending/final success checks
+ROBOT_NEUTRAL_RESET_ENABLED=true
+ROBOT_NEUTRAL_CONFIG=config/robot_neutral.json
+ROBOT_NEUTRAL_RESET_DURATION_S=3.0
+ROBOT_NEUTRAL_RESET_FPS=30
 DURATION=30
 ```
 
