@@ -57,8 +57,9 @@ tool calls `scripts/run_food_handoff.sh --no-stt --target <food> --max-cycles 1`
 for the actual robot cycle.
 
 - **Speech request:** ChatGPT Realtime transcribes the microphone stream and
-  chooses the target through a `run_handoff` tool call. Realtime text output is
-  spoken locally through ElevenLabs; Realtime audio output is not used.
+  chooses the target through a `run_handoff` tool call. Realtime model output is
+  text-only and is not spoken; robot speech is owned by the local ElevenLabs
+  control/tool paths.
 - **Unsupported requests:** if the user asks for anything outside Strawberry,
   Oreo, or Marshmallow, Realtime calls `unsupported_item_requested` and the local
   control path speaks a randomized unavailable-item phrase through ElevenLabs.

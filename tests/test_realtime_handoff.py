@@ -98,6 +98,31 @@ class RealtimeHandoffTest(unittest.TestCase):
         self.assertIn("unsupported_item_requested", tools)
         self.assertNotIn("apple", tools["run_handoff"]["parameters"]["properties"]["target"]["enum"])
 
+    def test_spoken_tool_results_do_not_request_realtime_followup(self):
+        config = run_clanker.PolicyConfig(
+            target="strawberry",
+            path=Path("food_policies.json"),
+            display_name="Strawberry",
+            policy_repo_id="org/strawberry",
+            task="Pick Strawberry",
+        )
+        runner = run_clanker.PolicyRunner({"strawberry": config}, dry_run=True, dry_run_seconds=0)
+        clanker = run_clanker.RealtimeClanker(
+            api_key="sk-test",
+            model="gpt-test",
+            voice="",
+            runner=runner,
+            tts_worker=None,
+            greeting=False,
+            barge_in=False,
+        )
+        sent: list[dict] = []
+        clanker.send_event = sent.append
+
+        clanker._run_tool_and_respond("run_handoff", "call_1", '{"target":"strawberry"}')
+
+        self.assertEqual([event["type"] for event in sent], ["conversation.item.create"])
+
 
 if __name__ == "__main__":
     unittest.main()

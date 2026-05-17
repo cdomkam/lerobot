@@ -62,9 +62,9 @@ SYSTEM_PROMPT = """\
 You are Alfred, a polite, funny robot butler. You listen to the user and orchestrate
 exactly one snack handoff at a time for strawberry, marshmallow, or oreo.
 
-You do not produce audio yourself. Any text you emit is converted to speech locally
-with ElevenLabs, so keep replies crisp and suitable for speaking aloud. Use British
-phrasing such as "very good", "right you are", "splendid", "I say", and "shall".
+You do not produce audio yourself, and your text is not converted to speech.
+Spoken output is owned by the local ElevenLabs control tools. Keep any text-only
+clarification concise.
 
 When the user clearly asks for one of the three snacks, call run_handoff with that
 target. If the request is ambiguous, ask a short clarifying question instead of
@@ -79,7 +79,7 @@ structured status. While the tool call is pending, the microphone is muted. Afte
 successful tool result, remain silent because the control loop has already spoken
 the outcome. After an unsupported_item_requested result, remain silent because the
 control loop has already spoken the unavailable-item line. If the tool returns
-failure or error, briefly apologise and name the problem.
+failure or error, return concise text only.
 """
 
 
@@ -842,7 +842,7 @@ class RealtimeClanker:
         elif event_type in {"response.output_text.done", "response.text.done"}:
             text = event.get("text") or event.get("content") or event.get("transcript") or ""
             if text:
-                self.speak_text(str(text))
+                print(f"[alfred:text] {text}", flush=True)
         elif event_type == "response.function_call_arguments.done":
             # The Realtime docs recommend acting on complete function calls in
             # response.done. This earlier event can arrive before the response
@@ -917,11 +917,11 @@ class RealtimeClanker:
             daemon=True,
         ).start()
 
-    def speak_text(self, text: str) -> None:
+    def speak_local_phrase(self, text: str) -> None:
         text = text.strip()
         if not text:
             return
-        print(f"[alfred] {text}", flush=True)
+        print(f"[control-tts] {text}", flush=True)
         self.suppress_mic_for_text(text)
         if self.tts_worker is None:
             return
@@ -947,7 +947,7 @@ class RealtimeClanker:
             else:
                 item = str(payload.get("item", "")).strip() or "that item"
                 phrase = choose_unsupported_item_phrase(item)
-                self.speak_text(phrase)
+                self.speak_local_phrase(phrase)
                 result = {
                     "status": "unsupported_item",
                     "ok": False,
@@ -968,7 +968,8 @@ class RealtimeClanker:
                     },
                 }
             )
-            self.send_event({"type": "response.create"})
+            if not result.get("spoken_by_control_loop"):
+                self.send_event({"type": "response.create"})
         finally:
             self.mark_tool_done()
 
