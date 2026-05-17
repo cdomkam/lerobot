@@ -51,13 +51,28 @@ loading LeRobot rollout code, and without requiring policy checkpoints or OOD
 detector files. It still exercises ElevenLabs STT, target classification, policy
 selection, success/OOD handling, and ElevenLabs TTS by default.
 
+Run one mocked cycle from a recorded voice request:
+
 ```bash
 ./scripts/run_food_handoff.sh \
   --test-mode \
   --test-audio recordings/voice_requests/strawberry_request.wav
 ```
 
-Run multiple mocked cycles with speech input and output still enabled:
+Other recorded request clips:
+
+```bash
+./scripts/run_food_handoff.sh \
+  --test-mode \
+  --test-audio recordings/voice_requests/oreo_request.wav
+
+./scripts/run_food_handoff.sh \
+  --test-mode \
+  --test-audio recordings/voice_requests/marshmallow_request.wav
+```
+
+Run multiple mocked cycles with speech input and output enabled. The reset pause
+gives the previous hand time to leave the frame:
 
 ```bash
 ./scripts/run_food_handoff.sh \
@@ -110,17 +125,19 @@ Run the same flow against the robot by removing `--test-mode`:
 ./scripts/run_food_handoff.sh
 ```
 
-That command loops until Ctrl-C. Between cycles it waits `RESET_PAUSE_S=7`
-seconds by default so the previous hand can move out of frame. Adjust it with:
+That command uses speech input and speech output, loops until Ctrl-C, and waits
+`RESET_PAUSE_S=7` seconds between cycles so the previous hand can move out of
+frame.
 
-```bash
-./scripts/run_food_handoff.sh --reset-pause-s 10
-```
-
-Useful robot-mode variants:
+Run one real handoff:
 
 ```bash
 ./scripts/run_food_handoff.sh --max-cycles 1
+```
+
+Adjust the hand reset pause:
+
+```bash
 ./scripts/run_food_handoff.sh --reset-pause-s 10
 ```
 
