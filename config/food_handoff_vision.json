@@ -1,14 +1,4 @@
 {
-  "hand": {
-    "camera_name": "side",
-    "fps": 30,
-    "roi": [0.2, 0.18, 0.78, 0.8],
-    "baseline_frames": 15,
-    "min_mean_abs_diff": 18.0,
-    "min_changed_fraction": 0.08,
-    "changed_pixel_threshold": 28.0,
-    "debounce_frames": 10
-  },
   "success": {
     "camera_name": "side",
     "roi": [0.3, 0.25, 0.65, 0.65],

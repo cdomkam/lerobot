@@ -70,12 +70,13 @@ target. If the request is ambiguous, ask a short clarifying question instead of
 calling the tool. If the user asks for anything outside strawberry, marshmallow, or
 oreo, politely explain that your tray is limited to those three delicacies.
 
-The run_handoff tool waits for the hand, speaks the fetching line through ElevenLabs,
-runs the robot policy, checks side-camera success using GPT-5.4-nano in the background,
-speaks the final success phrase through ElevenLabs, and returns structured status.
-While the tool call is pending, the microphone is muted. After a successful tool
-result, remain silent because the control loop has already spoken the outcome.
-If the tool returns failure or error, briefly apologise and name the problem.
+The run_handoff tool speaks the fetching line through ElevenLabs, immediately runs
+the requested robot policy, checks side-camera success using GPT-5.4-nano in the
+background, speaks the final success phrase through ElevenLabs, and returns
+structured status. While the tool call is pending, the microphone is muted. After a
+successful tool result, remain silent because the control loop has already spoken
+the outcome. If the tool returns failure or error, briefly apologise and name the
+problem.
 """
 
 
@@ -987,9 +988,9 @@ class RealtimeClanker:
                     "name": "run_handoff",
                     "description": (
                         "Run exactly one local SO-101 food handoff cycle for the requested snack. "
-                        "The control loop waits for the hand, speaks status through ElevenLabs, "
-                        "runs the policy, checks side-camera success with GPT-5.4-nano, and returns "
-                        "structured success, failure, or error status."
+                        "The control loop speaks status through ElevenLabs, immediately runs the "
+                        "policy, checks side-camera success with GPT-5.4-nano, and returns structured "
+                        "success, failure, or error status."
                     ),
                     "parameters": {
                         "type": "object",

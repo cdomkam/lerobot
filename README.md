@@ -7,17 +7,16 @@ The production handoff loop is ChatGPT Realtime driven:
 
 1. ChatGPT Realtime listens to the microphone, transcribes the user request,
    and decides when to call the `run_handoff` tool.
-2. The deterministic handoff control loop waits for a hand in the scene camera
-   frame, runs the selected policy, and checks success.
+2. The deterministic handoff control loop speaks the fetching line, immediately
+   runs the selected policy, and checks success.
 3. GPT-5.4-nano vision checks side-camera success on background threads while
    the policy runs.
 4. All spoken robot responses use the existing ElevenLabs TTS flow and phrase
    inventories.
 
-The normal robot path uses a local OpenCV detector for hand entry. When OpenAI
-success confirmation is enabled, side-camera success checks run during the
-policy loop so a correct delivery can be accepted even if the local color/ROI
-success detector misses it.
+When OpenAI success confirmation is enabled, side-camera success checks run
+during the policy loop so a correct delivery can be accepted even if the local
+color/ROI success detector misses it.
 
 ## Production Run
 
@@ -30,8 +29,8 @@ multi-policy robot loop:
 
 ChatGPT Realtime listens and calls `run_handoff(target)` when the user requests
 Strawberry, Oreo, or Marshmallow. The tool runs one complete deterministic
-handoff cycle, including hand detection, ElevenLabs fetching/success speech,
-policy execution, side-camera success checks, and reset.
+handoff cycle, including ElevenLabs fetching/success speech, policy execution,
+side-camera success checks, and reset.
 
 OpenAI success confirmation is enabled by default in production. To disable it
 for a debug run:
@@ -61,13 +60,11 @@ Realtime orchestrator in `scripts/gpt_realtime/run_clanker.py`. The Realtime
 tool calls `scripts/run_food_handoff.sh --no-stt --target <food> --max-cycles 1`
 for the actual robot cycle.
 
-- **Hand gate:** `config/food_handoff_vision.json` watches named camera `side`
-  from the LeRobot observation and uses the configured `hand.roi`. It builds a
-  short empty-scene baseline, then triggers when enough pixels in that ROI
-  change for enough consecutive frames.
 - **Speech request:** ChatGPT Realtime transcribes the microphone stream and
   chooses the target through a `run_handoff` tool call. Realtime text output is
   spoken locally through ElevenLabs; Realtime audio output is not used.
+- **Policy trigger:** once Realtime calls `run_handoff(target)`, the lower-level
+  runner speaks the fetching phrase and starts the selected policy immediately.
 - **Policy selection:** `config/food_policies.json` maps the classified food to
   a Hugging Face policy repo, task prompt, and per-target OOD detector.
 - **Policy execution:** the selected LeRobot policy runs on SO-101 for
@@ -175,9 +172,9 @@ Preconfiguration:
   `ood_detector_path` values for every food you may request.
 - Confirm the relevant OOD detectors exist locally, for example
   `models/ood_detector_strawberry.npz`.
-- Confirm `config/food_handoff_vision.json` uses the scene camera for both
-  gates: `hand.camera_name=side` and `success.camera_name=side`.
-- Keep one hand near power/USB for the first robot run.
+- Confirm `config/food_handoff_vision.json` uses the scene camera for success:
+  `success.camera_name=side`.
+- Keep power/USB within reach for the first robot run.
 
 Run the Realtime robot loop and ask for any configured food, for example
 "strawberry". Stop after the cycle with Enter or Ctrl-C:
@@ -257,7 +254,6 @@ Expected successful logs include:
 [user] Please put the strawberry in my hand
 [handoff] Started strawberry: ...
 [CYCLE] start cycle=1
-[HAND] present
 [REQUEST] target=strawberry policy=...
 [TTS] queue wait=True phrase='...Strawberry...'
 [POLICY] starting target=strawberry ...
@@ -275,14 +271,13 @@ path uses Realtime speech input/tool orchestration and ElevenLabs speech output.
 Useful robot-mode environment knobs:
 
 ```bash
-CAMERA_SIDE_INDEX=1              # scene camera used for hand and success
+CAMERA_SIDE_INDEX=1              # scene camera used for success
 CAMERA_FRONT_INDEX=0             # on-robot/front camera, used by OOD by default
 OOD_CAMERA=front
 OPENAI_SUCCESS_ENABLED=true      # default; set false only for debug runs
 OPENAI_SUCCESS_CONFIG_PATH=.env
 OPENAI_SUCCESS_EVERY_N=15        # minimum frames between OpenAI confirmation calls
 DURATION=30
-HAND_WAIT_TIMEOUT_S=0
 ```
 
 ## Smoke Tests

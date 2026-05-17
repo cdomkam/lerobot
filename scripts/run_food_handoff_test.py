@@ -81,9 +81,6 @@ def main() -> None:
         while args.max_cycles == 0 or cycle < args.max_cycles:
             cycle += 1
             logger.info("[CYCLE] start cycle=%d", cycle)
-            logger.info("Waiting for hand in camera frame...")
-            logger.info("[HAND] mocked present")
-            logger.info("[HAND] present")
 
             target = args.target.strip().lower() or None
             if target is None:
@@ -187,7 +184,7 @@ def reset_between_cycles(args: argparse.Namespace, cycle: int) -> None:
     if args.reset_pause_s <= 0:
         return
     logger.info(
-        "[CYCLE] reset pause %.1fs; move the hand out of frame before the next cycle",
+        "[CYCLE] reset pause %.1fs; reset the scene before the next cycle",
         args.reset_pause_s,
     )
     time.sleep(args.reset_pause_s)

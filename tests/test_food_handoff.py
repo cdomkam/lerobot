@@ -109,34 +109,12 @@ class FoodHandoffTest(unittest.TestCase):
         self.assertIn(b"scribe_v2", request.data)
         self.assertIn(b'name="keyterms"', request.data)
 
-    def test_hand_presence_debounces_roi_change(self):
-        config = vision.HandVisionConfig(
-            roi=(0, 0, 1, 1),
-            baseline_frames=2,
-            debounce_frames=2,
-            min_mean_abs_diff=10,
-            min_changed_fraction=0.1,
-            changed_pixel_threshold=10,
-        )
-        detector = vision.HandPresenceDetector(config)
-        empty = np.zeros((10, 10, 3), dtype=np.uint8)
-        changed = np.full((10, 10, 3), 80, dtype=np.uint8)
-
-        self.assertFalse(detector.update(empty).ready)
-        self.assertFalse(detector.update(empty).ready)
-        self.assertFalse(detector.update(changed).detected)
-        self.assertTrue(detector.update(changed).detected)
-
     def test_vision_config_uses_named_observation_cameras(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "vision.json"
             path.write_text(
                 json.dumps(
                     {
-                        "hand": {
-                            "camera_name": "side",
-                            "roi": [0, 0, 1, 1],
-                        },
                         "success": {
                             "camera_name": "side",
                             "targets": {},
@@ -147,7 +125,6 @@ class FoodHandoffTest(unittest.TestCase):
 
             config = vision.load_vision_config(path)
 
-        self.assertEqual(config.hand.camera_name, "side")
         self.assertEqual(config.success.camera_name, "side")
 
     def test_success_detector_debounces_target_color(self):

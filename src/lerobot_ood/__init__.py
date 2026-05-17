@@ -43,8 +43,6 @@ from .tts import (
 )
 from .vision import (
     FoodHandoffVisionConfig,
-    HandPresenceDetector,
-    HandVisionConfig,
     SuccessVisionConfig,
     TargetColorConfig,
     TargetSuccessDetector,
@@ -82,8 +80,6 @@ __all__ = [
     "load_elevenlabs_stt_config",
     "transcribe_audio_file",
     "FoodHandoffVisionConfig",
-    "HandPresenceDetector",
-    "HandVisionConfig",
     "SuccessVisionConfig",
     "TargetColorConfig",
     "TargetSuccessDetector",

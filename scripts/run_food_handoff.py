@@ -27,7 +27,6 @@ from lerobot_ood import (
     ACTBackboneEncoder,
     DinoV2Encoder,
     ElevenLabsTTSWorker,
-    HandPresenceDetector,
     OODDetector,
     TargetSuccessDetector,
     canonicalize_target,
@@ -60,7 +59,6 @@ class FoodHandoffConfig(RolloutConfig):
     request_audio_seconds: float = 3.0
     request_audio_sample_rate: int = 16000
     request_recorder_command: str = ""
-    hand_wait_timeout_s: float = 0.0
     ood_enabled: bool = False
     ood_detector_path: str = ""
     ood_camera: str = "front"
@@ -138,7 +136,7 @@ def main(cfg: FoodHandoffConfig) -> None:
         raise ValueError("--target must be one of: strawberry, oreo, marshmallow")
     bootstrap_policy_repo_id = policy_repo_id_from_config(cfg.policy)
     if not cfg.test_mode and not bootstrap_policy_repo_id:
-        raise ValueError("A bootstrap policy is required for robot camera observations.")
+        raise ValueError("A bootstrap policy is required for LeRobot configuration.")
 
     base_ood_detector_path = cfg.ood_detector_path
     cycle = 0
@@ -153,24 +151,6 @@ def main(cfg: FoodHandoffConfig) -> None:
             cycle += 1
             logger.info("[CYCLE] start cycle=%d", cycle)
             selected_target = target_override
-
-            logger.info("Waiting for hand in camera %r...", vision_config.hand.camera_name)
-            if cfg.test_mode:
-                logger.info("[HAND] mocked present")
-            else:
-                shutdown_event = ProcessSignalHandler(use_threads=True, display_pid=False).shutdown_event
-                set_policy_config(cfg, bootstrap_policy_repo_id)
-                logger.info("Building rollout context for hand detection...")
-                hand_ctx = build_rollout_context(cfg, shutdown_event)
-                try:
-                    wait_for_hand(
-                        hand_ctx.hardware.robot_wrapper,
-                        vision_config.hand,
-                        timeout_s=cfg.hand_wait_timeout_s,
-                    )
-                finally:
-                    disconnect_rollout_context(hand_ctx)
-            logger.info("[HAND] present")
 
             if selected_target is None:
                 if stt_config is None:
@@ -384,52 +364,10 @@ def reset_between_cycles(cfg: FoodHandoffConfig, cycle: int) -> None:
     if cfg.reset_pause_s <= 0:
         return
     logger.info(
-        "[CYCLE] reset pause %.1fs; move the hand out of frame before the next cycle",
+        "[CYCLE] reset pause %.1fs; reset the scene before the next cycle",
         cfg.reset_pause_s,
     )
     time.sleep(cfg.reset_pause_s)
-
-
-def wait_for_hand(robot, hand_config, timeout_s: float = 0.0) -> None:
-    detector = HandPresenceDetector(hand_config)
-    start = time.perf_counter()
-    last_log = start
-    frames = 0
-    while True:
-        obs_raw = robot.get_observation()
-        frame_rgb = extract_camera_frame(obs_raw, hand_config.camera_name)
-        result = detector.update(frame_rgb)
-        frames += 1
-        if result.detected:
-            logger.info("[HAND] score=%.3f frames=%d %s", result.score, frames, result.reason)
-            return
-        now = time.perf_counter()
-        if now - last_log >= 1.0:
-            logger.info(
-                "[HAND_WAIT] camera=%s frames=%d ready=%s score=%.3f %s",
-                hand_config.camera_name,
-                frames,
-                result.ready,
-                result.score,
-                result.reason,
-            )
-            last_log = now
-        if timeout_s > 0 and (time.perf_counter() - start) >= timeout_s:
-            raise TimeoutError(f"hand did not enter frame within {timeout_s:.1f}s")
-        precise_sleep(1.0 / max(hand_config.fps, 1))
-
-
-def disconnect_rollout_context(ctx) -> None:
-    try:
-        inner_robot = ctx.hardware.robot_wrapper.inner
-        if inner_robot.is_connected:
-            inner_robot.disconnect()
-    except AttributeError:
-        logger.warning("Could not disconnect robot from rollout context", exc_info=True)
-
-    teleop = getattr(ctx.hardware, "teleop", None)
-    if teleop is not None and teleop.is_connected:
-        teleop.disconnect()
 
 
 def score_ood_frame(detector: OODDetector, encoder, frame) -> object:

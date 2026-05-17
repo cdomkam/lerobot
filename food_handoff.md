@@ -1,7 +1,8 @@
 # Food Handoff Runtime
 
-This flow waits for a hand, records a short voice request, classifies the request
-as `strawberry`, `oreo`, or `marshmallow`, runs the matching policy, detects
+This flow is triggered by speech. ChatGPT Realtime listens for a request,
+selects `strawberry`, `oreo`, or `marshmallow` through the `run_handoff` tool,
+then the lower-level runner immediately starts the matching policy, detects
 whether the food reaches the hand, and speaks success or OOD audio through
 ElevenLabs.
 
@@ -13,7 +14,7 @@ SO-101.
 Robot mode repeats until interrupted by default. Test mode runs one cycle by
 default, so local commands finish; use `--max-cycles N` to test multiple cycles.
 Between cycles the runner pauses for `RESET_PAUSE_S=7` seconds by default so the
-existing hand can move out of frame before the next hand trigger.
+scene can be reset before the next voice-triggered cycle.
 
 ## Setup
 
@@ -21,8 +22,8 @@ Review the checked-in runtime configs:
 
 - `config/food_policies.json` with the three Hugging Face policy repo ids.
 - `config/food_handoff_vision.json` with camera ROI and color thresholds. The
-  current config uses camera index 1 / `side` for both hand entry and placement
-  success, because that scene view shows the food-in-hand state more clearly.
+  current config uses camera index 1 / `side` for placement success because
+  that scene view shows the food-in-hand state most clearly.
 - `.env` with `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, and
   `ELEVENLABS_MODEL_ID` for text-to-speech.
 
@@ -64,14 +65,15 @@ Debug-only overrides, when you explicitly do not want audio:
 
 ## Robot Run
 
-Run the same flow against SO-101 by removing `--test-mode`:
+Run the production Realtime flow against SO-101:
 
 ```bash
-./scripts/run_food_handoff.sh
+./scripts/run_realtime_food_handoff.sh
 ```
 
 Speech input and output are enabled by default. Use `--max-cycles N` to stop
-after N handoffs, or leave it unset for an unlimited robot loop:
+after N lower-level handoffs when debugging the lower-level runner, or leave it
+unset for an unlimited Realtime robot loop:
 
 ```bash
 ./scripts/run_food_handoff.sh --max-cycles 1
@@ -83,18 +85,21 @@ Debug-only overrides are available as `--no-voice` and
 
 ## Flow
 
-1. `WAIT_FOR_HAND`: Open the configured camera index and debounce hand entry in
-   the hand ROI.
-2. `RECORD_REQUEST`: Record a short mono WAV clip from the default microphone.
-3. `TRANSCRIBE_AND_CLASSIFY`: Send the clip to ElevenLabs STT and classify the
-   transcript with local keyword rules.
-4. `LOAD_OR_SELECT_POLICY`: Load the policy repo id from `food_policies.json`.
-5. `RUN_POLICY`: Run the same LeRobot control loop as the OOD wrapper.
-6. `SUCCESS`: Detect target-colored pixels in the configured hand ROI for a
-   stable debounce window, then speak success.
+1. `LISTEN`: ChatGPT Realtime listens to the microphone and transcribes the
+   user request.
+2. `ORCHESTRATE`: ChatGPT calls `run_handoff(target)` for a clear Strawberry,
+   Oreo, or Marshmallow request, or asks a short clarification for ambiguity.
+3. `LOAD_OR_SELECT_POLICY`: The lower-level runner loads the policy repo id from
+   `food_policies.json`.
+4. `FETCHING_TTS`: ElevenLabs speaks the fetching phrase for the selected food.
+5. `RUN_POLICY`: The selected LeRobot policy starts immediately.
+6. `SUCCESS`: GPT-5.4-nano checks side-camera frames in the background for the
+   target food in the user's hand. Local ROI/color success remains the fallback
+   when OpenAI success is disabled.
 7. `OOD`: Speak an OOD phrase on scene OOD or unclassified requests.
-8. `RESET_PAUSE`: Wait 5-10 seconds, default 7, so the hand can leave the frame.
-9. Return to `WAIT_FOR_HAND` unless the max cycle count was reached.
+8. `RESET_PAUSE`: Wait 5-10 seconds, default 7, so the scene can be reset.
+9. Return to `LISTEN` unless the max cycle count was reached or the process was
+   interrupted.
 
 ## Logs
 
@@ -102,15 +107,16 @@ Expected log markers:
 
 ```text
 [CYCLE] start cycle=1
-[HAND] present
 [REQUEST] transcript='Please bring me the Oreo' target=oreo
 [REQUEST] target=oreo policy=org/oreo-policy task='Pick up the Oreo...'
+[TTS] queue wait=True phrase='...Oreo...'
 [POLICY] starting target=oreo fps=30 duration=30s
 [OOD] frame=87 score=34.219 threshold=21.080
-[TASK_SUCCESS] target=oreo frame=342 confidence=0.091 target_blob_fraction=0.091
+[OPENAI_SUCCESS] frame=... success=True confidence=...
+[TASK_SUCCESS] target=oreo frame=342 source=openai opencv_score=...
 Run complete: target=oreo success=True success_frame=342 ...
 [CYCLE] complete cycle=1 outcome=success
-[CYCLE] reset pause 7.0s; move the hand out of frame before the next cycle
+[CYCLE] reset pause 7.0s; reset the scene before the next cycle
 ```
 
 ## Smoke Tests
@@ -142,9 +148,8 @@ uv run python scripts/replay_handoff_mock.py
 To accurately mock this flow without connecting to the SO-101, collect a small
 fixture pack:
 
-- LeRobot-style observation samples for each state: empty scene, hand entering,
-  hand present, each target on the pickup surface, each target in the hand, and
-  obvious OOD scenes.
+- LeRobot-style observation samples for each state: empty scene, each target on
+  the pickup surface, each target delivered, and obvious OOD scenes.
 - Matching `front` and `side` camera frames from the real camera positions. The
   OpenCV ROI detectors are camera-geometry dependent, so synthetic images are
   much less useful than frames from the real setup.
@@ -152,10 +157,10 @@ fixture pack:
   ElevenLabs STT, including the misspelling-prone Marshmallow/Marshmellow case.
 - The three trained policy repo IDs and either their fitted OOD detector files
   or representative training-distribution frames so detectors can be fit.
-- Success labels for fixture frames: target, whether the hand is present,
-  whether the item is in the hand, and whether the scene should be OOD.
+- Success labels for fixture frames: target, whether the item was delivered,
+  and whether the scene should be OOD.
 
 Training data is useful if it contains the real camera observations from the
 three tasks. It lets us replay observations through the classifier, OOD scorer,
 and ROI success detector without moving hardware, and it provides realistic
-thresholds for hand/success debounce tuning.
+thresholds for success debounce tuning.

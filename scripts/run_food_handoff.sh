@@ -13,9 +13,9 @@ usage() {
 Usage: ./scripts/run_food_handoff.sh [--no-voice] [--no-stt --target strawberry|oreo|marshmallow]
        ./scripts/run_food_handoff.sh --test-mode --test-audio recordings/voice_requests/strawberry_request.wav --no-voice
 
-Loops over handoff cycles: wait for hand, record speech, classify target, run
-the matching policy, detect placement/OOD, speak the outcome, then pause before
-waiting for the next hand. Use --max-cycles N to stop after N cycles; 0 means
+Loops over handoff cycles: record speech or use --target, classify/select the
+food policy, run it immediately, detect placement/OOD, speak the outcome, then
+pause before the next cycle. Use --max-cycles N to stop after N cycles; 0 means
 unlimited.
 USAGE
 }
@@ -94,7 +94,6 @@ STT_ENABLED="${STT_ENABLED:-true}"
 REQUEST_AUDIO_SECONDS="${REQUEST_AUDIO_SECONDS:-3}"
 REQUEST_AUDIO_SAMPLE_RATE="${REQUEST_AUDIO_SAMPLE_RATE:-16000}"
 REQUEST_RECORDER_COMMAND="${REQUEST_RECORDER_COMMAND:-}"
-HAND_WAIT_TIMEOUT_S="${HAND_WAIT_TIMEOUT_S:-0}"
 TEST_POLICY_STEPS="${TEST_POLICY_STEPS:-5}"
 TEST_SUCCESS_AFTER_STEPS="${TEST_SUCCESS_AFTER_STEPS:-3}"
 
@@ -210,9 +209,9 @@ echo "Duration:        ${DURATION}s"
 echo "Result JSON:     ${RESULT_JSON_PATH:-none}"
 echo
 if [[ "${TEST_MODE}" == "true" ]]; then
-  echo "Test mode uses mocked hand, policy, action, success, and OOD paths."
+  echo "Test mode uses mocked policy, action, success, and OOD paths."
 else
-  echo "Keep one hand near power/USB. Press Ctrl-C to stop."
+  echo "Keep power/USB within reach. Press Ctrl-C to stop."
 fi
 
 if [[ "${TEST_MODE}" == "true" ]]; then
@@ -259,7 +258,6 @@ exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --request_audio_seconds="${REQUEST_AUDIO_SECONDS}" \
   --request_audio_sample_rate="${REQUEST_AUDIO_SAMPLE_RATE}" \
   --request_recorder_command="${REQUEST_RECORDER_COMMAND}" \
-  --hand_wait_timeout_s="${HAND_WAIT_TIMEOUT_S}" \
   --ood_enabled="${OOD_ENABLED}" \
   --ood_detector_path="${OOD_DETECTOR_PATH}" \
   --ood_camera="${OOD_CAMERA}" \
