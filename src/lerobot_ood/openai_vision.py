@@ -78,27 +78,24 @@ def confirm_food_handoff_success(
     target_display_name: str,
     opener=urllib.request.urlopen,
 ) -> OpenAISuccessResult:
-    """Ask a vision model whether the robot is placing the target food in the user's hand."""
+    """Ask a vision model whether the target food is in the user's hand."""
     frames = _normalize_frames(frame_rgb)
     frame_word = "image" if len(frames) == 1 else f"{len(frames)} images"
     prompt = (
         "You are evaluating an SO-101 robot food handoff. "
-        f"You will receive {frame_word} from the side camera. If multiple images are provided, "
+        f"You will receive {frame_word} from the configured robot camera. If multiple images are provided, "
         "they are ordered from oldest to newest. Judge the sequence, not each frame in isolation. "
         "The user hand is a human hand, not the robot gripper. "
         f"The target food is: {target_display_name}. "
-        "Be strict: success requires visible sequence evidence that the robot moves, places, or "
-        "releases the correct target food into the human/user hand. The robot arm or gripper must "
-        "be visible near the user's hand during the transfer, and the newest image must show the "
-        "correct target food in or on the user's hand. It is not success if the robot is stalled, "
-        "absent, too far away, holding nothing, holding the wrong item, still solely holding the "
-        "item in its gripper, or if the user appears to have grabbed the food from the board, tray, "
-        "table, pickup surface, or robot without a robot placement. It is not success if the food is "
-        "only on the board, tray, table, or pickup surface. "
+        "Success means the newest image shows the correct target food resting in or on a visible "
+        "face-up human palm. It does not matter how the food got there. Do not require visible "
+        "robot placement, robot motion, or robot-to-hand transfer evidence. It is not success if "
+        "the food is still solely held by the robot gripper, or if the food is only on the board, "
+        "tray, table, pickup surface, or any surface other than the user's palm. "
         "For target_food_in_robot_gripper and target_food_on_tray, answer about the newest image. "
-        "For robot_placing_target_in_user_hand, answer true only when the provided sequence shows "
-        "robot-to-hand placement or release evidence. If unsure, set success-relevant booleans false "
-        "and use low confidence. "
+        "For robot_placing_target_in_user_hand, answer whether the robot appears to be placing the "
+        "food, but that field is diagnostic only and is not required for success. If unsure whether "
+        "the food is in a face-up palm, set target_food_in_user_hand false and use low confidence. "
         "Return strict JSON only with this shape: "
         '{"user_hand_present":true,"robot_visible":true,'
         '"robot_gripper_near_user_hand":true,"robot_placing_target_in_user_hand":true,'
@@ -164,15 +161,11 @@ def confirm_food_handoff_success(
     )
     success = (
         user_hand_present
-        and robot_visible
-        and robot_gripper_near_user_hand
-        and robot_placing_target_in_user_hand
         and target_food_visible
         and target_food_in_user_hand
         and correct_target_food
         and not bool(parsed.get("target_food_in_robot_gripper"))
         and not target_food_on_tray
-        and not user_grabbing_without_robot_placement
         and confidence >= config.min_confidence
     )
     return OpenAISuccessResult(

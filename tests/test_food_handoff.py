@@ -202,6 +202,18 @@ class FoodHandoffTest(unittest.TestCase):
         self.assertEqual(config.api_key, "sk-test")
         self.assertEqual(config.model, "gpt-test")
 
+    def test_tts_worker_can_drop_pending_alerts_before_priority_phrase(self):
+        config = tts.ElevenLabsTTSConfig(api_key="key", voice_id="voice")
+        worker = tts.ElevenLabsTTSWorker(config, max_queue_size=3)
+        worker._queue.put_nowait("ood alert one")
+        worker._queue.put_nowait("ood alert two")
+
+        dropped = worker.clear_pending()
+
+        self.assertEqual(dropped, 2)
+        self.assertEqual(worker._queue.qsize(), 0)
+        self.assertTrue(worker.wait_until_idle(timeout=0.1))
+
     def test_openai_success_confirmation_uses_responses_api(self):
         opener = Mock(
             return_value=FakeResponse(
@@ -265,10 +277,10 @@ class FoodHandoffTest(unittest.TestCase):
         self.assertEqual(payload["input"][0]["content"][1]["type"], "input_image")
         self.assertEqual(payload["input"][0]["content"][3]["type"], "input_image")
         self.assertIn("ordered from oldest to newest", payload["input"][0]["content"][0]["text"])
-        self.assertIn("user appears to have grabbed", payload["input"][0]["content"][0]["text"])
-        self.assertIn("board, tray", payload["input"][0]["content"][0]["text"])
+        self.assertIn("face-up human palm", payload["input"][0]["content"][0]["text"])
+        self.assertIn("does not matter how the food got there", payload["input"][0]["content"][0]["text"])
 
-    def test_openai_success_requires_robot_placement(self):
+    def test_openai_success_accepts_food_in_hand_without_robot_placement(self):
         opener = Mock(
             return_value=FakeResponse(
                 {
@@ -289,7 +301,7 @@ class FoodHandoffTest(unittest.TestCase):
                                             "correct_target_food": True,
                                             "user_grabbing_without_robot_placement": True,
                                             "confidence": 0.95,
-                                            "reason": "food is in hand but robot is not placing it",
+                                            "reason": "food is resting in the user's palm",
                                         }
                                     )
                                 }
@@ -319,7 +331,7 @@ class FoodHandoffTest(unittest.TestCase):
                 opener=opener,
             )
 
-        self.assertFalse(result.success)
+        self.assertTrue(result.success)
         self.assertTrue(result.target_food_in_user_hand)
         self.assertFalse(result.robot_placing_target_in_user_hand)
 

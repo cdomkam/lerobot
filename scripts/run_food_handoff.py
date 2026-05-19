@@ -66,7 +66,7 @@ class FoodHandoffConfig(RolloutConfig):
     request_audio_seconds: float = 3.0
     request_audio_sample_rate: int = 16000
     request_recorder_command: str = ""
-    ood_enabled: bool = True
+    ood_enabled: bool = False
     ood_detector_path: str = ""
     ood_camera: str = "front"
     ood_encoder: str = "act_backbone"
@@ -74,16 +74,20 @@ class FoodHandoffConfig(RolloutConfig):
     ood_log_every_n: int = 1
     ood_log_in_dist_every_n: int = 0
     ood_failure_after_n: int = 3
+    ood_initial_window_s: float = 5.0
     ood_tts_enabled: bool = True
     ood_tts_config_path: str = ".env"
     ood_tts_every_n: int = 3
     ood_tts_queue_max: int = 25
     openai_success_enabled: bool = False
     openai_success_config_path: str = ".env"
-    openai_success_every_n: int = 15
-    openai_success_sequence_frames: int = 5
-    openai_success_sequence_stride: int = 5
+    openai_success_every_n: int = 60
+    openai_success_sequence_frames: int = 1
+    openai_success_sequence_stride: int = 1
+    openai_success_max_in_flight: int = 2
     openai_success_grace_s: float = 15.0
+    openai_success_frame_dir: str = ""
+    loop_timing_log_every_n: int = 30
     test_mode: bool = False
     test_audio_path: str = ""
     max_cycles: int = 0
@@ -103,6 +107,18 @@ class ClassifiedRequest:
     transcript: str
     unsupported_item: bool = False
     unsupported_item_label: str = "that item"
+
+
+@dataclass
+class OpenAISuccessCheck:
+    frame_id: int
+    trigger: str
+    opencv_candidate: bool
+    opencv_score: float
+    opencv_reason: str
+    sequence_len: int
+    frames: list
+    submitted_at_s: float = 0.0
 
 
 @parser.wrap()
@@ -126,12 +142,18 @@ def main(cfg: FoodHandoffConfig) -> None:
         raise ValueError("--openai_success_sequence_frames must be positive")
     if cfg.openai_success_sequence_stride <= 0:
         raise ValueError("--openai_success_sequence_stride must be positive")
+    if cfg.openai_success_max_in_flight <= 0:
+        raise ValueError("--openai_success_max_in_flight must be positive")
     if cfg.openai_success_grace_s < 0:
         raise ValueError("--openai_success_grace_s must be >= 0")
+    if cfg.loop_timing_log_every_n < 0:
+        raise ValueError("--loop_timing_log_every_n must be >= 0")
     if cfg.ood_every_n <= 0:
         raise ValueError("--ood_every_n must be positive")
     if cfg.ood_failure_after_n < 0:
         raise ValueError("--ood_failure_after_n must be non-negative")
+    if cfg.ood_initial_window_s < 0:
+        raise ValueError("--ood_initial_window_s must be >= 0")
 
     policy_config = load_food_policy_config(cfg.food_policy_config)
     vision_config = load_vision_config(cfg.vision_config)
@@ -457,6 +479,13 @@ def reset_robot_to_neutral(cfg: FoodHandoffConfig, robot, processors, outcome: s
         logger.warning("[NEUTRAL_RESET] failed: %s", exc)
 
 
+def run_cleanup_step(name: str, fn) -> None:
+    try:
+        fn()
+    except Exception as exc:
+        logger.warning("[CLEANUP] %s failed: %s", name, exc)
+
+
 def score_ood_frame(detector: OODDetector, encoder, frame) -> object:
     embedding = encoder(frame)
     return detector.score(embedding)
@@ -474,6 +503,50 @@ def select_success_sequence(
     frames = list(frame_buffer)
     selected = frames[::-sequence_stride][:sequence_frames]
     return list(reversed(selected))
+
+
+def build_openai_success_check(
+    frame_buffer,
+    sequence_frames: int,
+    sequence_stride: int,
+    frame_id: int,
+    trigger: str,
+    success_result,
+) -> OpenAISuccessCheck:
+    success_sequence = list(frame_buffer)[-sequence_frames:]
+    return OpenAISuccessCheck(
+        frame_id=frame_id,
+        trigger=trigger,
+        opencv_candidate=bool(success_result.detected),
+        opencv_score=float(success_result.score),
+        opencv_reason=str(success_result.reason),
+        sequence_len=len(success_sequence),
+        frames=success_sequence,
+    )
+
+
+def save_openai_success_frames(check: OpenAISuccessCheck, output_dir: str | Path) -> list[Path]:
+    if not output_dir:
+        return []
+    try:
+        import cv2
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError("Saving OpenAI success frames requires opencv-python and numpy.") from exc
+
+    path = Path(output_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    saved: list[Path] = []
+    for i, frame in enumerate(check.frames, 1):
+        arr = np.asarray(frame)
+        if arr.ndim != 3 or arr.shape[-1] != 3:
+            raise ValueError(f"unexpected OpenAI success frame shape: {arr.shape}")
+        frame_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        frame_path = path / f"openai_success_frame_{check.frame_id:06d}_{i:02d}.jpg"
+        if not cv2.imwrite(str(frame_path), frame_bgr):
+            raise RuntimeError(f"failed to write OpenAI success frame: {frame_path}")
+        saved.append(frame_path)
+    return saved
 
 
 def run_selected_policy(
@@ -499,24 +572,30 @@ def run_selected_policy(
     sum_score = 0.0
     success = False
     success_frame = 0
+    success_source = ""
+    success_opencv_score = 0.0
+    success_opencv_reason = ""
     last_openai_success_check_frame = 0
     last_ood_check_frame = 0
-    pending_openai_success: Future | None = None
-    pending_openai_meta = None
+    pending_openai_success: dict[Future, OpenAISuccessCheck] = {}
+    queued_openai_success: OpenAISuccessCheck | None = None
     pending_ood: Future | None = None
     pending_ood_frame = 0
     outcome = "timeout"
-    success_frame_buffer = deque(
-        maxlen=max(1, cfg.openai_success_sequence_frames * cfg.openai_success_sequence_stride)
-    )
+    success_frame_buffer = deque(maxlen=1)
     in_success_grace = False
     pending_grace_wait_logged = False
+    ood_window_closed_logged = False
 
     engine.reset()
     engine.start()
     engine.resume()
     t_start = time.perf_counter()
-    openai_executor = ThreadPoolExecutor(max_workers=1) if openai_success_config is not None else None
+    openai_executor = (
+        ThreadPoolExecutor(max_workers=cfg.openai_success_max_in_flight)
+        if openai_success_config is not None
+        else None
+    )
     ood_executor = ThreadPoolExecutor(max_workers=1) if detector is not None else None
     logger.info(
         "[POLICY] starting target=%s fps=%d duration=%ds",
@@ -527,6 +606,11 @@ def run_selected_policy(
     try:
         while not shutdown_event.is_set():
             loop_start = time.perf_counter()
+            obs_dt = 0.0
+            ood_dt = 0.0
+            policy_dt = 0.0
+            success_dt = 0.0
+            openai_dt = 0.0
             elapsed_s = loop_start - t_start
             policy_active = cfg.duration <= 0 or elapsed_s < cfg.duration
             grace_elapsed_s = max(0.0, elapsed_s - cfg.duration) if cfg.duration > 0 else 0.0
@@ -548,34 +632,54 @@ def run_selected_policy(
                         cfg.openai_success_grace_s,
                     )
                 if grace_elapsed_s >= cfg.openai_success_grace_s:
-                    if pending_openai_success is None:
+                    if not pending_openai_success:
                         logger.info(
                             "OpenAI success grace limit reached (%.1fs)",
                             cfg.openai_success_grace_s,
                         )
                         break
-                    if not pending_openai_success.done():
-                        if not pending_grace_wait_logged:
-                            logger.info(
-                                "OpenAI success grace limit reached; waiting for pending success check"
-                            )
-                            pending_grace_wait_logged = True
+                    if not pending_grace_wait_logged:
+                        logger.info(
+                            "OpenAI success grace limit reached; waiting for %d pending success check(s)",
+                            len(pending_openai_success),
+                        )
+                        pending_grace_wait_logged = True
             allow_openai_submit = policy_active or (
                 openai_grace_available and grace_elapsed_s < cfg.openai_success_grace_s
             )
 
+            section_start = time.perf_counter()
             obs_raw = robot.get_observation()
+            obs_dt += time.perf_counter() - section_start
             frame = None
-            if policy_active:
+            ood_window_active = (
+                policy_active
+                and detector is not None
+                and cfg.ood_initial_window_s > 0
+                and elapsed_s < cfg.ood_initial_window_s
+            )
+            if policy_active and (ood_window_active or vision_config.success.camera_name == cfg.ood_camera):
                 try:
                     frame = extract_camera_frame(obs_raw, cfg.ood_camera)
                 except KeyError as e:
                     logger.error("Camera frame extraction failed: %s", e)
                     shutdown_event.set()
                     continue
+            if (
+                policy_active
+                and detector is not None
+                and not ood_window_active
+                and not ood_window_closed_logged
+            ):
+                logger.info(
+                    "[OOD] initial window closed at %.2fs; skipping further OOD checks",
+                    elapsed_s,
+                )
+                ood_window_closed_logged = True
 
             n_seen += 1
             if policy_active and pending_ood is not None and pending_ood.done():
+                section_start = time.perf_counter()
                 try:
                     result = pending_ood.result()
                 except Exception as exc:
@@ -615,9 +719,10 @@ def run_selected_policy(
                         )
                 pending_ood = None
                 pending_ood_frame = 0
+                ood_dt += time.perf_counter() - section_start
 
             if (
-                policy_active
+                ood_window_active
                 and
                 detector is not None
                 and ood_executor is not None
@@ -625,11 +730,14 @@ def run_selected_policy(
                 and n_seen - last_ood_check_frame >= cfg.ood_every_n
             ):
                 assert frame is not None
+                section_start = time.perf_counter()
                 pending_ood = ood_executor.submit(score_ood_frame, detector, encoder, frame.copy())
                 pending_ood_frame = n_seen
                 last_ood_check_frame = n_seen
+                ood_dt += time.perf_counter() - section_start
 
             if policy_active:
+                section_start = time.perf_counter()
                 obs_processed = processors.robot_observation_processor(obs_raw)
                 engine.notify_observation(obs_processed)
                 obs_frame = build_dataset_frame(
@@ -642,102 +750,120 @@ def run_selected_policy(
                     processed_action = processors.robot_action_processor((action_dict, obs_raw))
                     robot.send_action(processed_action)
                     n_actions += 1
+                policy_dt += time.perf_counter() - section_start
 
-            if policy_active and vision_config.success.camera_name == cfg.ood_camera:
-                assert frame is not None
-                success_frame_raw = frame
-            else:
-                success_frame_raw = extract_camera_frame(obs_raw, vision_config.success.camera_name)
-            success_frame_buffer.append(success_frame_raw.copy())
-            success_result = success_detector.update(success_frame_raw, selected_policy.target)
-            local_success_candidate = success_result.detected
             success_confirmed = False
-            success_source = ""
-            if pending_openai_success is not None and pending_openai_success.done():
-                frame_id, opencv_candidate, opencv_score, sequence_len = pending_openai_meta
+            section_start = time.perf_counter()
+            completed_openai = [future for future in list(pending_openai_success) if future.done()]
+            for future in completed_openai:
+                check = pending_openai_success.pop(future)
+                latency_s = loop_start - check.submitted_at_s
+                age_frames = max(0, n_seen - check.frame_id)
                 try:
-                    openai_result = pending_openai_success.result()
+                    openai_result = future.result()
                 except Exception as exc:
                     logger.warning(
-                        "[OPENAI_SUCCESS] async check failed; not accepting OpenCV candidate "
-                        "while OpenAI success is enabled: %s",
+                        "[OPENAI_SUCCESS] async check failed frame=%d latency=%.2fs age_frames=%d "
+                        "trigger=%s: %s",
+                        check.frame_id,
+                        latency_s,
+                        age_frames,
+                        check.trigger,
                         exc,
                     )
                 else:
                     logger.info(
-                        "[OPENAI_SUCCESS] frame=%d sequence_frames=%d success=%s confidence=%.3f hand=%s "
-                        "robot=%s gripper_near_hand=%s robot_placing=%s visible=%s "
-                        "in_user_hand=%s in_gripper=%s on_tray=%s correct_food=%s "
-                        "user_grabbed=%s opencv_candidate=%s opencv_score=%.3f reason=%r",
-                        frame_id,
-                        sequence_len,
+                        "[OPENAI_SUCCESS] result frame=%d success=%s confidence=%.3f "
+                        "latency=%.2fs age_frames=%d reason=%r",
+                        check.frame_id,
                         openai_result.success,
                         openai_result.confidence,
-                        openai_result.user_hand_present,
-                        openai_result.robot_visible,
-                        openai_result.robot_gripper_near_user_hand,
-                        openai_result.robot_placing_target_in_user_hand,
-                        openai_result.target_food_visible,
-                        openai_result.target_food_in_user_hand,
-                        openai_result.target_food_in_robot_gripper,
-                        openai_result.target_food_on_tray,
-                        openai_result.correct_target_food,
-                        openai_result.user_grabbing_without_robot_placement,
-                        opencv_candidate,
-                        opencv_score,
+                        latency_s,
+                        age_frames,
                         openai_result.reason,
                     )
                     success_confirmed = openai_result.success
-                    success_source = "openai" if success_confirmed else ""
-                    if opencv_candidate and not success_confirmed:
-                        logger.info(
-                            "[TASK_SUCCESS_CANDIDATE_REJECTED] target=%s frame=%d "
-                            "opencv_score=%.3f openai_confidence=%.3f",
-                            selected_policy.target,
-                            frame_id,
-                            opencv_score,
-                            openai_result.confidence,
-                        )
-                pending_openai_success = None
-                pending_openai_meta = None
+                    if success_confirmed:
+                        success_source = "openai"
+                        success_frame = check.frame_id
+                        success_opencv_score = check.opencv_score
+                        success_opencv_reason = check.opencv_reason
+                        break
+            openai_dt += time.perf_counter() - section_start
 
-            if openai_success_config is not None and openai_executor is not None:
+            openai_enabled = openai_success_config is not None and openai_executor is not None
+            openai_due = n_seen - last_openai_success_check_frame >= cfg.openai_success_every_n
+            openai_sample_due = openai_enabled and allow_openai_submit and not success_confirmed and openai_due
+            success_result = None
+            if openai_sample_due or not openai_enabled:
+                section_start = time.perf_counter()
+                if policy_active and vision_config.success.camera_name == cfg.ood_camera:
+                    assert frame is not None
+                    success_frame_raw = frame
+                else:
+                    success_frame_raw = extract_camera_frame(obs_raw, vision_config.success.camera_name)
+                success_result = success_detector.update(success_frame_raw, selected_policy.target)
+                if openai_sample_due:
+                    success_frame_buffer.append(success_frame_raw.copy())
+                success_dt += time.perf_counter() - section_start
+
+            if openai_enabled:
+                section_start = time.perf_counter()
                 openai_due = n_seen - last_openai_success_check_frame >= cfg.openai_success_every_n
-                if (
+                if allow_openai_submit and openai_due and not success_confirmed:
+                    if success_result is not None:
+                        queued_openai_success = build_openai_success_check(
+                            success_frame_buffer,
+                            cfg.openai_success_sequence_frames,
+                            cfg.openai_success_sequence_stride,
+                            n_seen,
+                            "cadence",
+                            success_result,
+                        )
+                        last_openai_success_check_frame = n_seen
+
+                while (
                     allow_openai_submit
-                    and pending_openai_success is None
-                    and (local_success_candidate or openai_due)
+                    and queued_openai_success is not None
+                    and len(pending_openai_success) < cfg.openai_success_max_in_flight
+                    and not success_confirmed
                 ):
-                    success_sequence = select_success_sequence(
-                        success_frame_buffer,
-                        cfg.openai_success_sequence_frames,
-                        cfg.openai_success_sequence_stride,
-                    )
-                    last_openai_success_check_frame = n_seen
-                    pending_openai_meta = (
-                        n_seen,
-                        local_success_candidate,
-                        success_result.score,
-                        len(success_sequence),
-                    )
-                    pending_openai_success = openai_executor.submit(
+                    check = queued_openai_success
+                    queued_openai_success = None
+                    check.submitted_at_s = loop_start
+                    if cfg.openai_success_frame_dir:
+                        try:
+                            saved_frames = save_openai_success_frames(
+                                check,
+                                cfg.openai_success_frame_dir,
+                            )
+                        except Exception as exc:
+                            logger.warning("[OPENAI_SUCCESS] failed to save sampled frame(s): %s", exc)
+                        else:
+                            logger.info(
+                                "[OPENAI_SUCCESS] saved %d sampled frame(s) to %s",
+                                len(saved_frames),
+                                cfg.openai_success_frame_dir,
+                            )
+                    future = openai_executor.submit(
                         confirm_success_frame,
                         openai_success_config,
-                        success_sequence,
+                        check.frames,
                         selected_policy.display_name,
                     )
+                    pending_openai_success[future] = check
                     logger.info(
-                        "[OPENAI_SUCCESS] submitted async check frame=%d sequence_frames=%d "
-                        "opencv_candidate=%s opencv_score=%.3f",
-                        n_seen,
-                        len(success_sequence),
-                        local_success_candidate,
-                        success_result.score,
+                        "[OPENAI_SUCCESS] evaluate frame=%d sequence_frames=%d in_flight=%d/%d",
+                        check.frame_id,
+                        check.sequence_len,
+                        len(pending_openai_success),
+                        cfg.openai_success_max_in_flight,
                     )
-            elif local_success_candidate:
+                openai_dt += time.perf_counter() - section_start
+            elif success_result is not None and success_result.detected:
                 logger.info(
                     "[TASK_SUCCESS_CANDIDATE_LOCAL_ONLY] target=%s frame=%d "
-                    "opencv_score=%.3f openai_disabled=true; not accepting as success",
+                    "opencv_score=%.3f openai_disabled=true; ignoring local detector for success",
                     selected_policy.target,
                     n_seen,
                     success_result.score,
@@ -745,22 +871,37 @@ def run_selected_policy(
 
             if success_confirmed:
                 success = True
-                success_frame = n_seen
                 outcome = "success"
                 logger.info(
                     "[TASK_SUCCESS] target=%s frame=%d source=%s opencv_score=%.3f %s",
                     selected_policy.target,
                     success_frame,
                     success_source,
-                    success_result.score,
-                    success_result.reason,
+                    success_opencv_score,
+                    success_opencv_reason,
                 )
                 phrase = choose_success_phrase(selected_policy.display_name)
-                speak(tts_worker, phrase, wait=True)
+                speak(tts_worker, phrase, wait=True, priority=True)
                 break
 
             dt = time.perf_counter() - loop_start
             sleep_t = control_interval - dt
+            if cfg.loop_timing_log_every_n > 0 and n_seen % cfg.loop_timing_log_every_n == 0:
+                logger.info(
+                    "[LOOP_TIMING] frame=%d total_ms=%.1f obs_ms=%.1f policy_ms=%.1f "
+                    "success_ms=%.1f openai_ms=%.1f ood_ms=%.1f sleep_ms=%.1f "
+                    "openai_in_flight=%d openai_samples=%d",
+                    n_seen,
+                    dt * 1000.0,
+                    obs_dt * 1000.0,
+                    policy_dt * 1000.0,
+                    success_dt * 1000.0,
+                    openai_dt * 1000.0,
+                    ood_dt * 1000.0,
+                    max(0.0, sleep_t) * 1000.0,
+                    len(pending_openai_success),
+                    len(success_frame_buffer),
+                )
             if sleep_t > 0:
                 precise_sleep(sleep_t)
             else:
@@ -773,14 +914,23 @@ def run_selected_policy(
             openai_executor.shutdown(wait=False, cancel_futures=True)
         if ood_executor is not None:
             ood_executor.shutdown(wait=False, cancel_futures=True)
-        engine.stop()
-        reset_robot_to_neutral(cfg, robot, processors, outcome, n_actions)
-        inner_robot = robot.inner
-        if inner_robot.is_connected:
-            inner_robot.disconnect()
-        teleop = ctx.hardware.teleop
-        if teleop is not None and teleop.is_connected:
-            teleop.disconnect()
+        run_cleanup_step("inference engine stop", engine.stop)
+        run_cleanup_step(
+            "neutral reset",
+            lambda: reset_robot_to_neutral(cfg, robot, processors, outcome, n_actions),
+        )
+        try:
+            inner_robot = robot.inner
+            if inner_robot.is_connected:
+                run_cleanup_step("robot disconnect", inner_robot.disconnect)
+        except Exception as exc:
+            logger.warning("[CLEANUP] robot disconnect precheck failed: %s", exc)
+        try:
+            teleop = ctx.hardware.teleop
+            if teleop is not None and teleop.is_connected:
+                run_cleanup_step("teleop disconnect", teleop.disconnect)
+        except Exception as exc:
+            logger.warning("[CLEANUP] teleop disconnect precheck failed: %s", exc)
         mean_score = sum_score / max(n_seen, 1) if detector is not None else 0.0
         threshold = detector.threshold if detector is not None else 0.0
         logger.info(
@@ -846,11 +996,20 @@ def run_mock_policy_flow(
     return "success" if success else "timeout"
 
 
-def speak(worker: ElevenLabsTTSWorker | None, phrase: str, wait: bool = False) -> None:
+def speak(
+    worker: ElevenLabsTTSWorker | None,
+    phrase: str,
+    wait: bool = False,
+    priority: bool = False,
+) -> None:
     if worker is None:
         logger.info("[TTS] disabled; skipping phrase=%r", phrase)
         return
-    logger.info("[TTS] queue wait=%s phrase=%r", wait, phrase)
+    if priority:
+        dropped = worker.clear_pending()
+        if dropped:
+            logger.info("[TTS] dropped %d queued phrase(s) before priority phrase", dropped)
+    logger.info("[TTS] queue wait=%s priority=%s phrase=%r", wait, priority, phrase)
     if not worker.speak(phrase, block=wait, timeout=30.0 if wait else None):
         logger.warning("TTS queue full; dropping voice phrase")
         return

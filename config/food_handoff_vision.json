@@ -1,6 +1,6 @@
 {
   "success": {
-    "camera_name": "side",
+    "camera_name": "front",
     "roi": [0.3, 0.25, 0.65, 0.65],
     "min_blob_fraction": 0.008,
     "min_context_bright_fraction": 0.5,

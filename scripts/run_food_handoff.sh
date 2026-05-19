@@ -77,22 +77,30 @@ UV_PYTHON="${UV_PYTHON:-3.12}"
 FOOD_POLICY_CONFIG="${FOOD_POLICY_CONFIG:-config/food_policies.json}"
 VISION_CONFIG="${VISION_CONFIG:-config/food_handoff_vision.json}"
 OOD_DETECTOR_PATH="${OOD_DETECTOR_PATH:-models/ood_detector.npz}"
-OOD_ENABLED="${OOD_ENABLED:-true}"
+OOD_ENABLED="${OOD_ENABLED:-false}"
 OOD_CAMERA="${OOD_CAMERA:-front}"
 OOD_ENCODER="${OOD_ENCODER:-act_backbone}"
 OOD_EVERY_N="${OOD_EVERY_N:-5}"
 OOD_LOG_IN_DIST_EVERY_N="${OOD_LOG_IN_DIST_EVERY_N:-0}"
 OOD_FAILURE_AFTER_N="${OOD_FAILURE_AFTER_N:-3}"
+OOD_INITIAL_WINDOW_S="${OOD_INITIAL_WINDOW_S:-5}"
 OOD_TTS_ENABLED="${OOD_TTS_ENABLED:-true}"
 OOD_TTS_CONFIG_PATH="${OOD_TTS_CONFIG_PATH:-.env}"
 OOD_TTS_EVERY_N="${OOD_TTS_EVERY_N:-3}"
 OOD_TTS_QUEUE_MAX="${OOD_TTS_QUEUE_MAX:-25}"
+FPS="${FPS:-30}"
+DURATION="${DURATION:-30}"
+LOOP_TIMING_LOG_EVERY_N="${LOOP_TIMING_LOG_EVERY_N:-${FPS}}"
 OPENAI_SUCCESS_ENABLED="${OPENAI_SUCCESS_ENABLED:-true}"
 OPENAI_SUCCESS_CONFIG_PATH="${OPENAI_SUCCESS_CONFIG_PATH:-.env}"
-OPENAI_SUCCESS_EVERY_N="${OPENAI_SUCCESS_EVERY_N:-15}"
-OPENAI_SUCCESS_SEQUENCE_FRAMES="${OPENAI_SUCCESS_SEQUENCE_FRAMES:-5}"
-OPENAI_SUCCESS_SEQUENCE_STRIDE="${OPENAI_SUCCESS_SEQUENCE_STRIDE:-5}"
+OPENAI_SUCCESS_EVERY_N="${OPENAI_SUCCESS_EVERY_N:-$(( FPS * 2 ))}"
+OPENAI_SUCCESS_SEQUENCE_FRAMES="${OPENAI_SUCCESS_SEQUENCE_FRAMES:-1}"
+if [[ -z "${OPENAI_SUCCESS_SEQUENCE_STRIDE:-}" ]]; then
+  OPENAI_SUCCESS_SEQUENCE_STRIDE=1
+fi
+OPENAI_SUCCESS_MAX_IN_FLIGHT="${OPENAI_SUCCESS_MAX_IN_FLIGHT:-2}"
 OPENAI_SUCCESS_GRACE_S="${OPENAI_SUCCESS_GRACE_S:-15}"
+OPENAI_SUCCESS_FRAME_DIR="${OPENAI_SUCCESS_FRAME_DIR:-}"
 ROBOT_NEUTRAL_RESET_ENABLED="${ROBOT_NEUTRAL_RESET_ENABLED:-true}"
 ROBOT_NEUTRAL_CONFIG="${ROBOT_NEUTRAL_CONFIG:-config/robot_neutral.json}"
 ROBOT_NEUTRAL_RESET_DURATION_S="${ROBOT_NEUTRAL_RESET_DURATION_S:-3.0}"
@@ -126,16 +134,14 @@ if [[ "${NO_STT}" == "true" ]]; then
   STT_ENABLED=false
 fi
 
-FPS="${FPS:-30}"
-DURATION="${DURATION:-30}"
 CAMERA_FRONT_INDEX="${CAMERA_FRONT_INDEX:-0}"
 CAMERA_SIDE_INDEX="${CAMERA_SIDE_INDEX:-1}"
 CAMERA_WIDTH="${CAMERA_WIDTH:-640}"
 CAMERA_HEIGHT="${CAMERA_HEIGHT:-480}"
 
-for path_var in FOOD_POLICY_CONFIG VISION_CONFIG OOD_DETECTOR_PATH OOD_TTS_CONFIG_PATH OPENAI_SUCCESS_CONFIG_PATH; do
+for path_var in FOOD_POLICY_CONFIG VISION_CONFIG OOD_DETECTOR_PATH OOD_TTS_CONFIG_PATH OPENAI_SUCCESS_CONFIG_PATH OPENAI_SUCCESS_FRAME_DIR; do
   value="${!path_var}"
-  if [[ "${value}" != /* ]]; then
+  if [[ "${value}" != "" && "${value}" != /* ]]; then
     printf -v "${path_var}" '%s/%s' "${ROOT_DIR}" "${value}"
   fi
 done
@@ -158,7 +164,7 @@ if [[ ! -f "${VISION_CONFIG}" ]]; then
   exit 1
 fi
 
-if [[ "${TEST_MODE}" != "true" && ! -f "${OOD_DETECTOR_PATH}" ]]; then
+if [[ "${TEST_MODE}" != "true" && "${OOD_ENABLED}" == "true" && ! -f "${OOD_DETECTOR_PATH}" ]]; then
   echo "Global OOD detector not found at: ${OOD_DETECTOR_PATH}" >&2
   echo "Continuing; a per-target ood_detector_path in the food config may be used instead." >&2
 fi
@@ -203,10 +209,14 @@ echo "Bootstrap policy:${BOOTSTRAP_POLICY_REPO_ID}"
 echo "OOD detector:    ${OOD_DETECTOR_PATH}"
 echo "OOD enabled:     ${OOD_ENABLED}"
 echo "OOD every N:     ${OOD_EVERY_N}"
+echo "OOD initial:     ${OOD_INITIAL_WINDOW_S}s"
 echo "OOD fail after:  ${OOD_FAILURE_AFTER_N}"
 echo "OpenAI success:  ${OPENAI_SUCCESS_ENABLED}"
 echo "OpenAI sequence: ${OPENAI_SUCCESS_SEQUENCE_FRAMES} frame(s), stride ${OPENAI_SUCCESS_SEQUENCE_STRIDE}"
+echo "OpenAI cadence:  every ${OPENAI_SUCCESS_EVERY_N} frame(s), max in flight ${OPENAI_SUCCESS_MAX_IN_FLIGHT}"
 echo "OpenAI grace:    ${OPENAI_SUCCESS_GRACE_S}s"
+echo "OpenAI frames:   ${OPENAI_SUCCESS_FRAME_DIR:-not saved}"
+echo "Loop timing:     every ${LOOP_TIMING_LOG_EVERY_N} frame(s)"
 echo "Neutral reset:   ${ROBOT_NEUTRAL_RESET_ENABLED}"
 echo "Neutral config:  ${ROBOT_NEUTRAL_CONFIG}"
 echo "Voice enabled:   ${OOD_TTS_ENABLED}"
@@ -278,6 +288,7 @@ exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --ood_every_n="${OOD_EVERY_N}" \
   --ood_log_in_dist_every_n="${OOD_LOG_IN_DIST_EVERY_N}" \
   --ood_failure_after_n="${OOD_FAILURE_AFTER_N}" \
+  --ood_initial_window_s="${OOD_INITIAL_WINDOW_S}" \
   --ood_tts_enabled="${OOD_TTS_ENABLED}" \
   --ood_tts_config_path="${OOD_TTS_CONFIG_PATH}" \
   --ood_tts_every_n="${OOD_TTS_EVERY_N}" \
@@ -287,7 +298,10 @@ exec "${UV_RUN[@]}" python "${ROOT_DIR}/scripts/run_food_handoff.py" \
   --openai_success_every_n="${OPENAI_SUCCESS_EVERY_N}" \
   --openai_success_sequence_frames="${OPENAI_SUCCESS_SEQUENCE_FRAMES}" \
   --openai_success_sequence_stride="${OPENAI_SUCCESS_SEQUENCE_STRIDE}" \
+  --openai_success_max_in_flight="${OPENAI_SUCCESS_MAX_IN_FLIGHT}" \
   --openai_success_grace_s="${OPENAI_SUCCESS_GRACE_S}" \
+  --openai_success_frame_dir="${OPENAI_SUCCESS_FRAME_DIR}" \
+  --loop_timing_log_every_n="${LOOP_TIMING_LOG_EVERY_N}" \
   --robot_neutral_reset_enabled="${ROBOT_NEUTRAL_RESET_ENABLED}" \
   --robot_neutral_config="${ROBOT_NEUTRAL_CONFIG}" \
   --robot_neutral_reset_duration_s="${ROBOT_NEUTRAL_RESET_DURATION_S}" \

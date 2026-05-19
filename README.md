@@ -76,27 +76,31 @@ for the actual robot cycle.
   the local neutral pose from `config/robot_neutral.json` before the next voice
   request can trigger a policy. Unsupported or unclassified text requests skip
   physical reset because no robot action ran.
-- **OOD scoring:** enabled by default. The ACT backbone encoder scores the
-  configured `OOD_CAMERA` against the selected target's detector `.npz` from
-  `config/food_policies.json`. OOD events are logged and can trigger ElevenLabs
-  voice alerts. After `OOD_FAILURE_AFTER_N` OOD detections, default `3`, the
-  cycle returns `ood_failure`, speaks the OOD phrase, stops the current policy,
-  records the failed action, and runs the normal reset pause before the next
-  voice request.
-- **Success detection:** the side camera, named `side`, maps to
-  `CAMERA_SIDE_INDEX=1` and is the scene camera in the current setup. When
+- **OOD scoring:** disabled by default. Set `OOD_ENABLED=true` to have the ACT
+  backbone encoder score the configured `OOD_CAMERA` against the selected
+  target's detector `.npz` from `config/food_policies.json` during the initial
+  `OOD_INITIAL_WINDOW_S` seconds of the policy cycle. This catches wrong
+  starting scenes or wrong pickup targets without re-evaluating after the robot
+  has already picked up the correct item. OOD events are logged and can trigger
+  ElevenLabs voice alerts. After `OOD_FAILURE_AFTER_N` OOD detections, default
+  `3`, the cycle returns `ood_failure`, speaks the OOD phrase, stops the
+  current policy, records the failed action, and runs the normal reset pause
+  before the next voice request.
+- **Success detection:** the front camera, named `front`, maps to
+  `CAMERA_FRONT_INDEX=0` and is the scene camera in the current setup. When
   OpenAI success is enabled, the loop sends an ordered short sequence of recent
-  side-camera frames to `gpt-5.4-nano` every `OPENAI_SUCCESS_EVERY_N` frames and
-  immediately on any local ROI/color success candidate. Success is accepted only
-  when the sequence shows the robot gripper near the hand placing or releasing
-  the correct target food, and the newest frame shows that food in the user's
-  hand, not still solely held by the gripper or sitting on the tray/table. It is
-  not success if the robot is stalled, absent, holding the wrong item, holding
-  the item away from the hand, or if the user grabs the item without robot
-  placement. Confidence must be at least `OPENAI_SUCCESS_MIN_CONFIDENCE` from
-  `.env` (default `0.70`). Local OpenCV ROI/color detection is only a candidate
-  trigger/log signal; it is not accepted as success when OpenAI is disabled or
-  when OpenAI confirmation fails.
+  front-camera frame to `gpt-5.4-nano` on a fixed cadence, defaulting to about
+  once every two seconds. The control loop only samples that frame;
+  resizing, JPEG encoding, base64 encoding, and the HTTP request
+  stay on background worker threads. Success is accepted only when the sequence shows the robot
+  gripper near the hand placing or releasing the correct target food, and the
+  newest frame shows that food in the user's hand, not still solely held by the
+  gripper or sitting on the tray/table. It is not success if the robot is
+  stalled, absent, holding the wrong item, holding the item away from the hand,
+  or if the user grabs the item without robot placement. Confidence must be at
+  least `OPENAI_SUCCESS_MIN_CONFIDENCE` from `.env` (default `0.70`). Local
+  OpenCV ROI/color detection is diagnostic only; it is not accepted as success
+  and does not trigger OpenAI checks.
 - **Reset/repeat:** robot mode loops until interrupted by default. Test mode
   runs one cycle by default. Use `--max-cycles N` to bound either mode, or
   `--max-cycles 0` for an unlimited loop.
@@ -189,7 +193,7 @@ Preconfiguration:
 - Confirm the relevant OOD detectors exist locally, for example
   `models/ood_detector_strawberry.npz`.
 - Confirm `config/food_handoff_vision.json` uses the scene camera for success:
-  `success.camera_name=side`.
+  `success.camera_name=front`.
 - Create local ignored `config/robot_neutral.json` with the operator-approved
   neutral pose for this robot:
   ```json
@@ -277,7 +281,7 @@ Expected successful logs include:
 [REQUEST] target=strawberry policy=...
 [TTS] queue wait=True phrase='...Strawberry...'
 [POLICY] starting target=strawberry ...
-[OPENAI_SUCCESS] frame=... sequence_frames=5 success=True ... robot_placing=True ...
+[OPENAI_SUCCESS] result frame=... success=True confidence=...
 [TASK_SUCCESS] target=strawberry frame=... source=openai opencv_score=...
 [TTS] queue wait=True phrase='...Strawberry...'
 [CYCLE] complete cycle=1 outcome=success
@@ -291,18 +295,22 @@ path uses Realtime speech input/tool orchestration and ElevenLabs speech output.
 Useful robot-mode environment knobs:
 
 ```bash
-CAMERA_SIDE_INDEX=1              # scene camera used for success
-CAMERA_FRONT_INDEX=0             # on-robot/front camera, used by OOD by default
-OOD_ENABLED=true                 # default; requires per-target detector files
+CAMERA_FRONT_INDEX=0             # scene camera used for success and OOD by default
+CAMERA_SIDE_INDEX=1              # optional secondary camera
+OOD_ENABLED=false                # opt-in; requires per-target detector files
 OOD_CAMERA=front
 OOD_FAILURE_AFTER_N=3            # OOD detections before failing/resetting cycle
+OOD_INITIAL_WINDOW_S=5           # only score OOD at the beginning of a cycle
 OOD_TTS_EVERY_N=3                # non-terminal OOD voice alert cadence
 OPENAI_SUCCESS_ENABLED=true      # default; required for automatic robot success
 OPENAI_SUCCESS_CONFIG_PATH=.env
-OPENAI_SUCCESS_EVERY_N=15        # minimum frames between OpenAI confirmation calls
-OPENAI_SUCCESS_SEQUENCE_FRAMES=5 # number of side-camera frames sent per check
-OPENAI_SUCCESS_SEQUENCE_STRIDE=5 # frame spacing inside the success sequence
+OPENAI_SUCCESS_EVERY_N=60        # frames between OpenAI checks; default wrapper uses 2*FPS
+OPENAI_SUCCESS_SEQUENCE_FRAMES=1 # one front-camera frame per check
+OPENAI_SUCCESS_SEQUENCE_STRIDE=1 # retained compatibility knob
+OPENAI_SUCCESS_MAX_IN_FLIGHT=2   # bounded requests; latest window waits if saturated
 OPENAI_SUCCESS_GRACE_S=15        # post-action window for pending/final success checks
+OPENAI_SUCCESS_FRAME_DIR=logs/openai_success_frames # optional sampled-frame debug output
+LOOP_TIMING_LOG_EVERY_N=30       # log control-loop timing sections every N frames
 ROBOT_NEUTRAL_RESET_ENABLED=true
 ROBOT_NEUTRAL_CONFIG=config/robot_neutral.json
 ROBOT_NEUTRAL_RESET_DURATION_S=3.0

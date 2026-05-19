@@ -94,10 +94,12 @@ Same env-var contract as `scripts/run_policy_on_robot.sh` plus these OOD knobs:
 
 | Env var | Default | Purpose |
 |---|---|---|
+| `OOD_ENABLED` | `false` | Opt in to OOD scoring during food handoff cycles |
 | `OOD_DETECTOR_PATH` | `models/ood_detector.npz` | Path to the fitted detector |
 | `OOD_CAMERA` | `front` | Which camera feeds the OOD score |
 | `OOD_ENCODER` | `act_backbone` | Must match the encoder used at fit time |
 | `OOD_LOG_IN_DIST_EVERY_N` | `0` | If >0, also print in-dist scores every N frames (debugging) |
+| `OOD_INITIAL_WINDOW_S` | `5` | Only run OOD scoring during the initial policy window |
 | `OOD_TTS_ENABLED` | `true` | If `true`, speak an ElevenLabs alert on OOD events |
 | `OOD_TTS_CONFIG_PATH` | `.env` | Local ignored config file with ElevenLabs credentials |
 | `OOD_TTS_EVERY_N` | `1` | Speak every Nth OOD event |

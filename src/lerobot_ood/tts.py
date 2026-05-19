@@ -267,6 +267,24 @@ class ElevenLabsTTSWorker:
             return False
         return True
 
+    def clear_pending(self) -> int:
+        """Drop queued-but-not-playing phrases and return how many were removed."""
+        removed = 0
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                if item is None:
+                    # Preserve the shutdown sentinel if close() has already been called.
+                    self._queue.put_nowait(None)
+                    break
+                removed += 1
+            finally:
+                self._queue.task_done()
+        return removed
+
     def close(self, timeout: float = 2.0) -> None:
         if not self._started:
             return
