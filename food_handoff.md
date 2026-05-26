@@ -23,7 +23,7 @@ Review the checked-in runtime configs:
 - `config/food_policies.json` with the three Hugging Face policy repo ids and
   per-target `ood_detector_path` values.
 - `config/food_handoff_vision.json` with camera ROI and color thresholds. The
-  current config uses camera index 1 / `side` for placement success because
+  current config uses camera index 0 / `side` for placement success because
   that scene view shows the food-in-hand state most clearly.
 - Local ignored `config/robot_neutral.json` with the operator-approved SO-101
   neutral action. The runtime uses it after robot-motion terminal states.

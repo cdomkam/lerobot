@@ -1,43 +1,10 @@
-"""Runnable: lerobot SO-101 + RemoteACTPolicy at fixed FPS.
+"""Local equivalent of run_remote_act.py — same loop, same JSONL schema.
 
-Connects to a local SO-101 follower via lerobot, captures observations, runs
-each one through a remote ACT inference server, and commands the robot at
-the same FPS used during training (default 30 Hz).
-
-The remote service returns 25-step action chunks; this script consumes them
-sequentially via RemoteACTPolicy so the robot follows a smooth trajectory
-between refreshes — same behavior as `lerobot-record` or `lerobot-eval`
-running locally.
-
-Safety is delegated to lerobot's standard `max_relative_target` on the
-robot config (see `ensure_safe_goal_position` in `lerobot/robots/utils.py`).
-The model's per-joint requested delta is clamped, never rejected, so the
-robot always moves toward the target.
-
-Per-tick instrumentation is written to `--log_path` (tick JSONL). A second
-file with the suffix `.refills.jsonl` captures every refill event from
-RemoteACTPolicy (HTTP timing, JPEG bytes, queue depth at request/landing,
-outcome). Together they let `scripts/analyze_act_traces.py` produce a
-side-by-side comparison against the local run.
-
-Example
--------
-
-    python serving/clients/run_remote_act.py \\
-        --url http://lerobot-act:8080/infer \\
-        --robot.port /dev/ttyACM0 \\
-        --robot.id my-so101 \\
-        --robot.cameras='{front: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}, side: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}' \\
-        --robot.max_relative_target 5.0 \\
-        --chunk_size 50 --n_action_steps 50 \\
-        --fps 30 \\
-        --log_path /tmp/remote-act.jsonl
-
-The robot config block (--robot.*) is parsed by lerobot's draccus. Note
-that RunConfig.robot is typed concretely as SOFollowerRobotConfig, so
-do NOT pass `--robot.type` — pass `--robot.port`, `--robot.cameras`,
-etc. directly. ACT is vision + proprioception only and takes no
-language input, so there is no --task flag either.
+Loads an ACT checkpoint into the SOFollower process and drives the robot
+at fixed FPS, writing the same per-tick and per-refill JSONL as the remote
+runner so the two traces can be compared directly by
+`scripts/analyze_act_traces.py`. The local "refill" event records MPS
+inference time in `inference_ms` (no HTTP, no JPEG).
 """
 from __future__ import annotations
 
@@ -54,59 +21,46 @@ import draccus
 from lerobot.robots.so_follower import SOFollower
 from lerobot.robots.so_follower.config_so_follower import SOFollowerRobotConfig
 
-# Register concrete CameraConfig subclasses with draccus's choice registry so
-# `--robot.cameras='{cam: {type: opencv, ...}}'` parses. Matches the set that
-# `lerobot/scripts/lerobot_record.py` imports for the same reason.
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
 from lerobot.cameras.reachy2_camera.configuration_reachy2_camera import Reachy2CameraConfig  # noqa: F401
 from lerobot.cameras.zmq.configuration_zmq import ZMQCameraConfig  # noqa: F401
 
 try:
-    # When invoked as `python -m serving.clients.run_remote_act`.
-    from .remote_act_policy import RemoteACTPolicy, SO101_JOINT_ORDER
+    from .local_act_policy import LocalACTPolicy, SO101_JOINT_ORDER
 except ImportError:
-    # When invoked as `python run_remote_act.py` directly.
     import os as _os
     sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-    from remote_act_policy import RemoteACTPolicy, SO101_JOINT_ORDER
+    from local_act_policy import LocalACTPolicy, SO101_JOINT_ORDER
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
-logger = logging.getLogger("vla.client")
+logger = logging.getLogger("vla.local")
 
 
 @dataclasses.dataclass
 class RunConfig:
-    url: str
+    pretrained_path: str
     robot: SOFollowerRobotConfig
 
-    # Inference / consumption.
-    chunk_size: int = 25
-    n_action_steps: int = 25
-    auth_token: str | None = None
-    timeout_s: float = 5.0
-    jpeg_quality: int = 90
-    on_refill_failure: str = "hold"  # "hold" | "raise"
+    device: str = "mps"
+    chunk_size: int = 50
+    n_action_steps: int = 50
+    on_refill_failure: str = "hold"
     prefetch_at_actions: int = 20
     comm_retries: int = 3
     comm_retry_sleep_s: float = 0.02
 
-    # Loop.
     fps: int = 30
     log_path: str | None = None
     max_ticks: int | None = None
-    # Tag added to every tick + refill record. Lets the analyzer distinguish
-    # multiple runs in the same trace file.
-    run_tag: str = "remote"
+    run_tag: str = "local"
 
 
 def _as_float_or_none(value) -> float | None:
-    if value is None:
-        return None
-    return float(value)
+    return None if value is None else float(value)
 
 
 def _safe_action_from_observation(
@@ -114,13 +68,8 @@ def _safe_action_from_observation(
     obs: dict,
     max_relative_target: float | None,
 ) -> tuple[dict[str, float], bool, float]:
-    """Clamp goal position to within ±max_relative_target of current state.
-
-    Returns (safe_goal_dict, clamp_engaged, worst_clamp_amount_deg).
-    """
     if max_relative_target is None:
         return requested, False, 0.0
-
     safe: dict[str, float] = {}
     engaged = False
     worst = 0.0
@@ -160,29 +109,19 @@ def _open_log(path: str | None, suffix: str = "") -> tuple[object | None, str | 
 
 
 def main(cfg: RunConfig) -> int:
-    if cfg.on_refill_failure not in ("hold", "raise"):
-        raise SystemExit(f"on_refill_failure must be 'hold' or 'raise'")
-
     max_relative_target = _as_float_or_none(cfg.robot.max_relative_target)
-    # We clamp in this runner using the observation already read for the tick.
-    # This avoids SOFollower.send_action() doing an extra Present_Position sync_read,
-    # which was a major source of Feetech "no status packet" failures.
     cfg.robot.max_relative_target = None
     robot = SOFollower(cfg.robot)
     logger.info("connecting to robot on %s ...", cfg.robot.port)
     robot.connect()
     logger.info("connected. cameras=%s", list(robot.cameras.keys()))
-    if max_relative_target is not None:
-        logger.info("using runner-side max_relative_target=%.3f", max_relative_target)
 
-    policy = RemoteACTPolicy(
-        url=cfg.url,
+    policy = LocalACTPolicy(
+        pretrained_path=cfg.pretrained_path,
+        device=cfg.device,
         chunk_size=cfg.chunk_size,
         n_action_steps=cfg.n_action_steps,
         camera_keys=tuple(robot.cameras.keys()),
-        auth_token=cfg.auth_token,
-        timeout_s=cfg.timeout_s,
-        jpeg_quality=cfg.jpeg_quality,
         on_refill_failure=cfg.on_refill_failure,
         prefetch_at_actions=cfg.prefetch_at_actions,
     )
@@ -218,7 +157,6 @@ def main(cfg: RunConfig) -> int:
             loop_dt_ms = (t_tick_start - prev_tick_start) * 1000.0 if prev_tick_start else None
             prev_tick_start = t_tick_start
 
-            # Phase 1: read observation.
             t0 = time.perf_counter()
             try:
                 obs = _retry_io(
@@ -234,7 +172,6 @@ def main(cfg: RunConfig) -> int:
                 continue
             obs_read_ms = (time.perf_counter() - t0) * 1000.0
 
-            # Phase 2: policy.
             t0 = time.perf_counter()
             requested = policy.select_action(obs)
             policy_select_ms = (time.perf_counter() - t0) * 1000.0
@@ -244,12 +181,10 @@ def main(cfg: RunConfig) -> int:
             prefetch_inflight = policy.prefetch_inflight
             obs_used_age_ms = policy.last_obs_age_ms
 
-            # Phase 3: clamp.
             safe_requested, clamp_engaged, clamp_worst_deg = _safe_action_from_observation(
                 requested, obs, max_relative_target
             )
 
-            # Phase 4: send action.
             t0 = time.perf_counter()
             try:
                 sent = _retry_io(
@@ -271,7 +206,6 @@ def main(cfg: RunConfig) -> int:
                     tick, tick_total_ms, tick_period * 1000.0, cfg.fps,
                 )
 
-            # Drain refill events the policy buffered this tick.
             if refill_log:
                 for ev in policy.pop_refill_events():
                     ev["tick"] = tick
@@ -311,17 +245,15 @@ def main(cfg: RunConfig) -> int:
                 tick_log.flush()
 
             tick += 1
-            # Drift-free sleep: pace to absolute next_tick, not relative wait.
             sleep_for = next_tick - time.perf_counter()
             if sleep_for > 0:
                 time.sleep(sleep_for)
             else:
-                # Behind schedule — skip ahead to catch up rather than fall further.
                 next_tick = time.perf_counter()
             next_tick += tick_period
     finally:
         logger.info(
-            "stopping: %d ticks, %d /infer calls (%d failed)",
+            "stopping: %d ticks, %d inferences (%d failed)",
             tick, policy.refill_calls, policy.refill_failures,
         )
         try:

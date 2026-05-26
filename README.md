@@ -84,7 +84,7 @@ for the actual robot cycle.
   records the failed action, and runs the normal reset pause before the next
   voice request.
 - **Success detection:** the side camera, named `side`, maps to
-  `CAMERA_SIDE_INDEX=1` and is the scene camera in the current setup. When
+  `CAMERA_SIDE_INDEX=0` and is the scene camera in the current setup. When
   OpenAI success is enabled, the loop sends an ordered short sequence of recent
   side-camera frames to `gpt-5.4-nano` every `OPENAI_SUCCESS_EVERY_N` frames and
   immediately on any local ROI/color success candidate. Success is accepted only
@@ -291,8 +291,8 @@ path uses Realtime speech input/tool orchestration and ElevenLabs speech output.
 Useful robot-mode environment knobs:
 
 ```bash
-CAMERA_SIDE_INDEX=1              # scene camera used for success
-CAMERA_FRONT_INDEX=0             # on-robot/front camera, used by OOD by default
+CAMERA_SIDE_INDEX=0              # scene camera used for success
+CAMERA_FRONT_INDEX=1             # on-robot/front camera, used by OOD by default
 OOD_ENABLED=true                 # default; requires per-target detector files
 OOD_CAMERA=front
 OOD_FAILURE_AFTER_N=3            # OOD detections before failing/resetting cycle

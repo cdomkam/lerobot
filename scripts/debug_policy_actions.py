@@ -84,12 +84,16 @@ def main(cfg: DebugPolicyActionsConfig) -> None:
                     logger.info("Duration limit reached (%.1fs)", cfg.duration)
                     break
 
+                t_obs_start = time.perf_counter()
                 obs_raw = robot.get_observation()
+                t_obs_ms = (time.perf_counter() - t_obs_start) * 1000
                 state = _state_from_observation(obs_raw)
                 obs_processed = processors.robot_observation_processor(obs_raw)
                 engine.notify_observation(obs_processed)
                 obs_frame = build_dataset_frame(ctx.data.dataset_features, obs_processed, prefix=OBS_STR)
+                t_infer_start = time.perf_counter()
                 action_tensor = engine.get_action(obs_frame)
+                t_infer_ms = (time.perf_counter() - t_infer_start) * 1000
 
                 frames += 1
                 if action_tensor is not None:
@@ -114,18 +118,22 @@ def main(cfg: DebugPolicyActionsConfig) -> None:
                     f.write(json.dumps(record) + "\n")
                     f.flush()
 
+                    t_send_ms = 0.0
+                    if cfg.send_actions:
+                        t_send_start = time.perf_counter()
+                        robot.send_action(processed_action)
+                        t_send_ms = (time.perf_counter() - t_send_start) * 1000
+
                     if actions % cfg.log_every_n == 0:
                         logger.info(
-                            "frame=%d action=%s state=%s max_abs_delta=%s sent=%s",
+                            "frame=%d obs=%.0fms infer=%.0fms send=%.0fms max_abs_delta=%s sent=%s",
                             frames,
-                            processed_action,
-                            state,
+                            t_obs_ms,
+                            t_infer_ms,
+                            t_send_ms,
                             f"{max_delta:.3f}" if max_delta is not None else "n/a",
                             cfg.send_actions,
                         )
-
-                    if cfg.send_actions:
-                        robot.send_action(processed_action)
 
                 dt = time.perf_counter() - loop_start
                 sleep_t = control_interval - dt

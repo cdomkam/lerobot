@@ -7,9 +7,14 @@ URL="${URL:-http://154.54.100.64:8080/infer}"
 FPS="${FPS:-30}"
 MAX_RELATIVE_TARGET="${MAX_RELATIVE_TARGET:-5.0}"
 LOG_PATH="${LOG_PATH:-/tmp/remote-act.jsonl}"
-CHUNK_SIZE="${CHUNK_SIZE:-25}"
-N_ACTION_STEPS="${N_ACTION_STEPS:-25}"
-PREFETCH_AT_ACTIONS="${PREFETCH_AT_ACTIONS:-20}"
+RUN_TAG="${RUN_TAG:-remote}"
+CHUNK_SIZE="${CHUNK_SIZE:-50}"
+N_ACTION_STEPS="${N_ACTION_STEPS:-50}"
+# Remote inference takes ~300 ms over HTTP, so blocking would freeze the loop for ~300 ms every
+# chunk. Default leaves enough lead time to cover that. Cost: each new chunk's action[0] was
+# computed from an observation PREFETCH_AT_ACTIONS/FPS seconds ago (stale obs). Lower this to
+# reduce staleness; raise it to absorb HTTP tail latency. Set to 0 to block (worst smoothness).
+PREFETCH_AT_ACTIONS="${PREFETCH_AT_ACTIONS:-15}"
 TIMEOUT_S="${TIMEOUT_S:-5.0}"
 COMM_RETRIES="${COMM_RETRIES:-3}"
 COMM_RETRY_SLEEP_S="${COMM_RETRY_SLEEP_S:-0.02}"
@@ -22,6 +27,8 @@ CAMERA_WIDTH="${CAMERA_WIDTH:-640}"
 CAMERA_HEIGHT="${CAMERA_HEIGHT:-480}"
 
 CAMERAS="{front: {type: opencv, index_or_path: ${CAMERA_FRONT_INDEX}, width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${FPS}}, side: {type: opencv, index_or_path: ${CAMERA_SIDE_INDEX}, width: ${CAMERA_WIDTH}, height: ${CAMERA_HEIGHT}, fps: ${FPS}}}"
+
+UV_PYTHON="${UV_PYTHON:-3.12}"
 
 echo "Remote ACT URL:  ${URL}"
 echo "Robot port:      ${ROBOT_PORT}"
@@ -36,7 +43,7 @@ echo
 echo "Keep one hand near power/USB. Press Ctrl-C to stop."
 
 args=(
-  python scripts/serving/clients/run_remote_act.py
+  uvx --python "${UV_PYTHON}" --from 'lerobot[feetech]' python scripts/serving/clients/run_remote_act.py
   --url "${URL}"
   --robot.port "${ROBOT_PORT}"
   --robot.id "${ROBOT_ID}"
@@ -51,6 +58,7 @@ args=(
   --on_refill_failure "${ON_REFILL_FAILURE}"
   --fps "${FPS}"
   --log_path "${LOG_PATH}"
+  --run_tag "${RUN_TAG}"
 )
 
 if [[ -n "${AUTH_TOKEN}" ]]; then

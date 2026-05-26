@@ -86,3 +86,6 @@ tmp/
 .DS_Store
 Thumbs.db
 .venv-clanker
+
+# Local read-only reference clone of huggingface/lerobot — re-clone if needed
+vendor/

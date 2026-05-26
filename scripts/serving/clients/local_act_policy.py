@@ -1,22 +1,16 @@
-"""Drop-in HTTP client for the ACT inference server.
+"""Local in-process equivalent of RemoteACTPolicy for apples-to-apples profiling.
 
-Mirrors lerobot's `policy.select_action(observation)` semantics: returns ONE
-action per call from an internal queue. The queue is refilled by a single
-POST to `/infer` every `n_action_steps` ticks, so the robot follows a smooth
-trajectory between refreshes — matches what `lerobot/policies/act` does
-locally via its built-in `_action_queue`. Without this buffering the client
-would re-request a fresh chunk every tick and use only `chunk[0]`, which
-produces a permanent "first-step catch-up" delta and either jerks the robot
-or trips the safety clamp on every tick.
+Loads an ACT checkpoint with the same pre/post processors lerobot trains
+with, then exposes the same queue + prefetch interface as RemoteACTPolicy.
+This lets `scripts/analyze_act_traces.py` compare local-MPS vs remote-HTTP
+runs with identical JSONL schemas — only the latency source differs
+(MPS inference time replaces HTTP roundtrip).
 
-Safety is intentionally NOT done here. Use lerobot's `SOFollowerConfig.
-max_relative_target` (calls `ensure_safe_goal_position` in `send_action`) —
-that's where lerobot itself puts per-step position clamping for SO-101.
+Inference runs in a background thread via ThreadPoolExecutor so prefetch
+overlaps with the robot control loop, matching RemoteACTPolicy's behavior.
 """
 from __future__ import annotations
 
-import io
-import json
 import logging
 import time
 from collections import deque
@@ -24,14 +18,14 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Sequence
 
 import numpy as np
-import requests
-from PIL import Image
+import torch
+
+from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+from lerobot.policies.pretrained import PreTrainedPolicy
+from lerobot.policies.utils import prepare_observation_for_inference
 
 logger = logging.getLogger(__name__)
 
-# SO-101 joint order as trained — matches the column order in the LeRobot
-# SO-101 datasets and the action vector the model emits. Override if a
-# different ordering was used during training.
 SO101_JOINT_ORDER: tuple[str, ...] = (
     "shoulder_pan.pos",
     "shoulder_lift.pos",
@@ -42,18 +36,16 @@ SO101_JOINT_ORDER: tuple[str, ...] = (
 )
 
 
-class RemoteACTPolicy:
+class LocalACTPolicy:
     def __init__(
         self,
-        url: str,
+        pretrained_path: str,
         *,
-        chunk_size: int = 25,
+        device: str = "mps",
+        chunk_size: int = 50,
         n_action_steps: int | None = None,
         joint_order: Sequence[str] = SO101_JOINT_ORDER,
         camera_keys: Sequence[str] = ("front", "side"),
-        auth_token: str | None = None,
-        timeout_s: float = 5.0,
-        jpeg_quality: int = 90,
         on_refill_failure: str = "hold",
         prefetch_at_actions: int = 20,
     ) -> None:
@@ -64,47 +56,57 @@ class RemoteACTPolicy:
         if not 1 <= n_action_steps <= chunk_size:
             raise ValueError("1 <= n_action_steps <= chunk_size required")
 
-        self._url = url
+        self._pretrained_path = pretrained_path
+        self._device = torch.device(device)
         self._chunk_size = chunk_size
         self._n_action_steps = n_action_steps
         self._joint_order = tuple(joint_order)
         self._camera_keys = tuple(camera_keys)
-        self._auth_token = auth_token
-        self._timeout_s = timeout_s
-        self._jpeg_quality = jpeg_quality
         self._on_refill_failure = on_refill_failure
         self._prefetch_at_actions = prefetch_at_actions
 
+        # Load policy via the same factory lerobot-train/eval use. ``act`` is
+        # registered in `lerobot.policies.factory`.
+        logger.info("loading ACT from %s onto %s ...", pretrained_path, self._device)
+        policy_cls = get_policy_class("act")
+        self._policy: PreTrainedPolicy = policy_cls.from_pretrained(pretrained_path)
+        self._policy.config.device = str(self._device)
+        # Match the deployed chunk size (the user trained chunk_size=50 but
+        # may want to evaluate with a smaller n_action_steps).
+        self._policy.config.chunk_size = chunk_size
+        self._policy.config.n_action_steps = n_action_steps
+        self._policy.to(self._device)
+        self._policy.eval()
+        # Pre/post processors live alongside the checkpoint on the Hub.
+        self._preprocessor, self._postprocessor = make_pre_post_processors(
+            policy_cfg=self._policy.config,
+            pretrained_path=pretrained_path,
+            preprocessor_overrides={"device_processor": {"device": str(self._device)}},
+        )
+        logger.info("loaded ACT chunk_size=%d n_action_steps=%d device=%s",
+                    chunk_size, n_action_steps, self._device)
+
         self._queue: deque[np.ndarray] = deque(maxlen=n_action_steps)
-        self._session = requests.Session()
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._pending_refill: Future[dict] | None = None
         self._prefetched_actions: list[np.ndarray] | None = None
         self._prefetched_obs_taken_at: float | None = None
-        # Track the very last popped action so we can measure the chunk-seam
-        # discontinuity when a new chunk gets installed.
         self._last_popped: np.ndarray | None = None
-        # Time (perf_counter) when the observation that produced the currently
-        # executing chunk was captured. Every pop measures its own age from this.
         self._current_chunk_obs_taken_at: float | None = None
-        # Telemetry counters — useful for tests and for logging from the runner.
+
+        # Public telemetry.
         self.refill_calls = 0
         self.refill_failures = 0
         self.refill_latency_ms: float | None = None
-        # Buffered per-refill records. The runner drains via pop_refill_events()
-        # each tick and writes to a separate JSONL file.
         self._refill_events: list[dict] = []
-        # Per-tick observables (overwritten each call to select_action).
         self.last_was_holding: bool = False
         self.last_chunk_seam_delta: float | None = None
         self.last_obs_age_ms: float | None = None
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
-        self._session.close()
 
     def reset(self) -> None:
-        """Clear the action queue. Call between episodes."""
         self._queue.clear()
         if self._pending_refill is not None:
             self._pending_refill.cancel()
@@ -123,13 +125,11 @@ class RemoteACTPolicy:
         return self._pending_refill is not None
 
     def pop_refill_events(self) -> list[dict]:
-        """Return + clear all refill events buffered since the last call."""
         events = self._refill_events
         self._refill_events = []
         return events
 
     def select_action(self, observation: dict) -> dict[str, float]:
-        """Return one action. Refills queue from server when empty."""
         self.last_was_holding = False
         self.last_chunk_seam_delta = None
         self.last_obs_age_ms = None
@@ -140,12 +140,9 @@ class RemoteACTPolicy:
                 self._install_chunk(self._prefetched_actions, self._prefetched_obs_taken_at)
                 self._prefetched_actions = None
                 self._prefetched_obs_taken_at = None
-                logger.debug("installed prefetched remote ACT chunk (%d actions)", len(self._queue))
             else:
                 self._refill_blocking(observation)
         if not self._queue:
-            # Refill failed and on_refill_failure="hold" — return current state
-            # as the goal so the safety clamp on the robot produces no motion.
             self.last_was_holding = True
             return self._hold_action(observation)
         action_arr = self._queue.popleft()
@@ -158,16 +155,15 @@ class RemoteACTPolicy:
             and self._prefetched_actions is None
             and 0 < len(self._queue) <= self._prefetch_at_actions
         ):
-            queue_depth_at_request = len(self._queue)
+            qd = len(self._queue)
             obs_taken_at = time.perf_counter()
+            obs_snapshot = self._snapshot_obs(observation)
             self._pending_refill = self._executor.submit(
-                self._request_actions, observation, queue_depth_at_request, False, obs_taken_at
+                self._infer_chunk, obs_snapshot, qd, False, obs_taken_at
             )
-            logger.debug("started remote ACT prefetch with %d queued actions", queue_depth_at_request)
         return dict(zip(self._joint_order, (float(v) for v in action_arr)))
 
     def _install_chunk(self, actions: list[np.ndarray], obs_taken_at: float | None) -> None:
-        """Replace the queue contents with a fresh chunk; record the seam delta + obs timestamp."""
         if self._last_popped is not None and len(actions) > 0:
             seam = float(np.max(np.abs(actions[0] - self._last_popped)))
             self.last_chunk_seam_delta = seam
@@ -182,7 +178,6 @@ class RemoteACTPolicy:
             event = self._pending_refill.result()
         except Exception as e:
             self.refill_failures += 1
-            msg = f"/infer prefetch failed: {type(e).__name__}: {e}"
             self._refill_events.append({
                 "trigger": "prefetch",
                 "outcome": "error",
@@ -191,28 +186,24 @@ class RemoteACTPolicy:
                 "wall_end_s": time.time(),
             })
             if self._on_refill_failure == "raise":
-                raise RuntimeError(msg) from e
-            logger.warning("%s — keeping existing queue", msg)
+                raise RuntimeError(str(e)) from e
+            logger.warning("inference prefetch failed: %s — keeping existing queue", e)
         else:
             self._prefetched_actions = event["actions"]
             self._prefetched_obs_taken_at = event.get("obs_taken_at")
             event["queue_depth_at_landing"] = len(self._queue)
             event.pop("actions", None)
             self._refill_events.append(event)
-            logger.debug("prefetched remote ACT chunk ready (%d actions)", len(self._prefetched_actions))
         finally:
             self._pending_refill = None
 
     def _refill_blocking(self, observation: dict) -> None:
         obs_taken_at = time.perf_counter()
+        obs_snapshot = self._snapshot_obs(observation)
         try:
-            event = self._request_actions(
-                observation, queue_depth_at_request=0, was_blocking=True,
-                obs_taken_at=obs_taken_at,
-            )
+            event = self._infer_chunk(obs_snapshot, 0, was_blocking=True, obs_taken_at=obs_taken_at)
         except Exception as e:
             self.refill_failures += 1
-            msg = f"/infer call failed: {type(e).__name__}: {e}"
             self._refill_events.append({
                 "trigger": "blocking",
                 "outcome": "error",
@@ -221,8 +212,8 @@ class RemoteACTPolicy:
                 "wall_end_s": time.time(),
             })
             if self._on_refill_failure == "raise":
-                raise RuntimeError(msg) from e
-            logger.warning("%s — holding position", msg)
+                raise RuntimeError(str(e)) from e
+            logger.warning("inference call failed: %s — holding position", e)
             return
         actions = event["actions"]
         event["queue_depth_at_landing"] = len(self._queue)
@@ -230,83 +221,57 @@ class RemoteACTPolicy:
         self._refill_events.append(event)
         self._install_chunk(actions, event.get("obs_taken_at"))
 
-    def _request_actions(
+    def _snapshot_obs(self, observation: dict) -> dict[str, np.ndarray]:
+        """Copy out only what we need from the live robot obs — caller is on
+        the control thread, inference happens later on the executor."""
+        state = np.fromiter(
+            (float(observation[k]) for k in self._joint_order),
+            dtype=np.float32,
+            count=len(self._joint_order),
+        )
+        snap: dict[str, np.ndarray] = {"observation.state": state}
+        for cam in self._camera_keys:
+            if cam not in observation:
+                raise KeyError(f"observation missing camera {cam!r}; have {sorted(observation)}")
+            img = observation[cam]
+            if img.dtype != np.uint8 or img.ndim != 3 or img.shape[2] != 3:
+                raise ValueError(f"camera {cam!r} must be uint8 HxWx3 RGB, got {img.dtype} {img.shape}")
+            # Copy because the camera buffer may be reused before inference runs.
+            snap[f"observation.images.{cam}"] = img.copy()
+        return snap
+
+    def _infer_chunk(
         self,
-        observation: dict,
+        obs_snapshot: dict[str, np.ndarray],
         queue_depth_at_request: int,
         was_blocking: bool,
         obs_taken_at: float,
     ) -> dict:
-        try:
-            state_arr = np.fromiter(
-                (float(observation[k]) for k in self._joint_order),
-                dtype=np.float32,
-                count=len(self._joint_order),
-            )
-        except KeyError as e:
-            raise KeyError(
-                f"observation missing joint key {e!r}; "
-                f"expected keys: {self._joint_order}"
-            ) from None
-
-        wall_start_s = time.time()
-        enc_start = time.perf_counter()
-        files = []
-        jpeg_bytes: dict[str, int] = {}
-        for cam_name in self._camera_keys:
-            if cam_name not in observation:
-                raise KeyError(
-                    f"observation missing camera {cam_name!r}; "
-                    f"available keys: {sorted(observation)}"
-                )
-            img = observation[cam_name]
-            if img.dtype != np.uint8 or img.ndim != 3 or img.shape[2] != 3:
-                raise ValueError(
-                    f"camera {cam_name!r} must be uint8 HxWx3 RGB, "
-                    f"got dtype={img.dtype} shape={img.shape}"
-                )
-            buf = io.BytesIO()
-            Image.fromarray(img).save(buf, format="JPEG", quality=self._jpeg_quality)
-            payload = buf.getvalue()
-            jpeg_bytes[cam_name] = len(payload)
-            files.append((cam_name, (f"{cam_name}.jpg", payload, "image/jpeg")))
-        jpeg_encode_ms = (time.perf_counter() - enc_start) * 1000.0
-
-        data = {"state": json.dumps(state_arr.tolist())}
-        headers = {}
-        if self._auth_token:
-            headers["Authorization"] = f"Bearer {self._auth_token}"
-
         self.refill_calls += 1
-        http_start = time.perf_counter()
+        wall_start_s = time.time()
         outcome = "success"
-        server_inference_us = None
+        t0 = time.perf_counter()
         try:
-            resp = self._session.post(
-                self._url, files=files, data=data,
-                headers=headers, timeout=self._timeout_s,
-            )
-            resp.raise_for_status()
-            body = resp.json()
-            actions = body.get("action")
-            server_inference_us = int(body.get("inference_us", 0)) or None
-            if not isinstance(actions, list) or len(actions) < self._n_action_steps:
-                outcome = "malformed"
-                raise RuntimeError(
-                    f"server returned malformed action (got "
-                    f"{len(actions) if isinstance(actions, list) else type(actions).__name__}, "
-                    f"expected list of {self._n_action_steps}+)"
+            with torch.inference_mode():
+                batch = prepare_observation_for_inference(
+                    dict(obs_snapshot),  # function mutates in place
+                    device=self._device,
                 )
-            actions_np = [np.asarray(a, dtype=np.float32) for a in actions[: self._n_action_steps]]
-        except requests.Timeout:
-            outcome = "timeout"
-            raise
-        except requests.HTTPError as e:
-            outcome = f"http_{e.response.status_code if e.response is not None else 'error'}"
+                batch = self._preprocessor(batch)
+                chunk = self._policy.predict_action_chunk(batch)  # (1, chunk_size, action_dim)
+                # Postprocess each step. ACT's postprocessor is action-only
+                # denorm; applying once-per-action keeps shapes unambiguous.
+                actions_np: list[np.ndarray] = []
+                for i in range(min(self._n_action_steps, chunk.shape[1])):
+                    a = chunk[:, i, :]  # (1, action_dim)
+                    a = self._postprocessor(a)
+                    actions_np.append(a.squeeze(0).detach().cpu().numpy().astype(np.float32))
+        except Exception:
+            outcome = "error"
             raise
         finally:
-            http_total_ms = (time.perf_counter() - http_start) * 1000.0
-            self.refill_latency_ms = http_total_ms
+            inference_ms = (time.perf_counter() - t0) * 1000.0
+            self.refill_latency_ms = inference_ms
 
         return {
             "actions": actions_np,
@@ -315,14 +280,7 @@ class RemoteACTPolicy:
             "outcome": outcome,
             "wall_start_s": wall_start_s,
             "wall_end_s": time.time(),
-            "jpeg_encode_ms": jpeg_encode_ms,
-            "jpeg_bytes_total": sum(jpeg_bytes.values()),
-            "jpeg_bytes_per_cam": jpeg_bytes,
-            "http_total_ms": http_total_ms,
-            "server_inference_us": server_inference_us,
-            "network_ms": (http_total_ms - server_inference_us / 1000.0)
-            if server_inference_us is not None
-            else None,
+            "inference_ms": inference_ms,
             "queue_depth_at_request": queue_depth_at_request,
             "refill_call_idx": self.refill_calls,
         }

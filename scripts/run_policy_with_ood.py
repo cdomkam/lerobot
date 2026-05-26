@@ -19,7 +19,7 @@ Usage
         --robot.type=so101_follower \\
         --robot.port=/dev/cu.usbmodem5C4C1268491 \\
         --robot.id=so101_follower \\
-        --robot.cameras='{front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}, side: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}}' \\
+        --robot.cameras='{front: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}, side: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}' \\
         --task='Pick up the tape and put it on the pink post-it.' \\
         --fps=30 --duration=30 \\
         --ood_detector_path=models/ood_detector.npz \\
