@@ -56,6 +56,7 @@ class RemoteACTPolicy:
         jpeg_quality: int = 90,
         on_refill_failure: str = "hold",
         prefetch_at_actions: int = 20,
+        task: str | None = None,
     ) -> None:
         if on_refill_failure not in ("hold", "raise"):
             raise ValueError("on_refill_failure must be 'hold' or 'raise'")
@@ -74,6 +75,9 @@ class RemoteACTPolicy:
         self._jpeg_quality = jpeg_quality
         self._on_refill_failure = on_refill_failure
         self._prefetch_at_actions = prefetch_at_actions
+        # Optional language prompt for VLA endpoints (e.g. pi0.5). ACT endpoints
+        # ignore unknown form fields, so leaving this set is harmless for ACT too.
+        self._task = task
 
         self._queue: deque[np.ndarray] = deque(maxlen=n_action_steps)
         self._session = requests.Session()
@@ -273,6 +277,8 @@ class RemoteACTPolicy:
         jpeg_encode_ms = (time.perf_counter() - enc_start) * 1000.0
 
         data = {"state": json.dumps(state_arr.tolist())}
+        if self._task is not None:
+            data["task"] = self._task
         headers = {}
         if self._auth_token:
             headers["Authorization"] = f"Bearer {self._auth_token}"

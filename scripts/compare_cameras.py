@@ -7,13 +7,16 @@ outputs/camera_compare/ so you can eyeball which live index matches which.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import cv2
 from huggingface_hub import hf_hub_download
 
-DATASET_REPO = "ofcourseistillloveyou/so101_recording_marshmellow_40ep"
+DATASET_REPO = os.environ.get(
+    "DATASET_REPO", "ofcourseistillloveyou/so101_recording_20260519_000250"
+)
 CAMERA_KEYS = ["front", "side"]
 LOCAL_INDICES = [0, 1]
 OUT_DIR = Path("outputs/camera_compare")

@@ -93,6 +93,9 @@ class RunConfig:
     prefetch_at_actions: int = 20
     comm_retries: int = 3
     comm_retry_sleep_s: float = 0.02
+    # Optional language prompt forwarded to VLA endpoints (e.g. pi0.5).
+    # ACT endpoints don't read it; leave unset for ACT.
+    task: str | None = None
 
     # Loop.
     fps: int = 30
@@ -185,7 +188,10 @@ def main(cfg: RunConfig) -> int:
         jpeg_quality=cfg.jpeg_quality,
         on_refill_failure=cfg.on_refill_failure,
         prefetch_at_actions=cfg.prefetch_at_actions,
+        task=cfg.task,
     )
+    if cfg.task:
+        logger.info("forwarding task prompt: %r", cfg.task)
 
     tick_log, tick_log_path = _open_log(cfg.log_path)
     refill_log, refill_log_path = _open_log(cfg.log_path, suffix=".refills")
